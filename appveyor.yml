@@ -11,7 +11,7 @@ before_build:
 
 build:
   parallel: true
-  project: Ambermoon.net.sln
+  project: SonicArranger.sln
 
 artifacts:
   - path: nuget\*.nupkg

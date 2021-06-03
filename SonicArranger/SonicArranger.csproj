@@ -8,6 +8,7 @@
     <RepositoryUrl>https://github.com/Pyrdacor/SonicArranger</RepositoryUrl>
     <RepositoryType>GitHub</RepositoryType>
     <PackageTags>SonicArranger Tracker C# Amiga</PackageTags>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
   </PropertyGroup>
 
 </Project>

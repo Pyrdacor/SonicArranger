@@ -14,15 +14,106 @@ build:
   project: SonicArranger.sln
 
 artifacts:
+  - path: SonicConvert-Windows.zip
+    name: SonicConvert-Windows
+  - path: SonicConvert-Windows32Bit.zip
+    name: SonicConvert-Windows32Bit
+  - path: SonicConvert-Linux.tar.gz
+    name: SonicConvert-Linux
+  - path: SonicConvert-Windows-Standalone.zip
+    name: SonicConvert-Windows-Standalone
+  - path: SonicConvert-Windows32Bit-Standalone.zip
+    name: SonicConvert-Windows32Bit-Standalone
+  - path: SonicConvert-Linux-Standalone.tar.gz
+    name: SonicConvert-Linux-Standalone
   - path: nuget\*.nupkg
     name: NugetPackages
 
 after_build:
+    - ps: if ($env:APPVEYOR_REPO_TAG -eq $true) { ./publish.ps1 }
     - ps: ./nuget.ps1
 
 test: off
 
 deploy:
+  - provider: GitHub
+    name: SonicConvert-Windows
+    artifact: SonicConvert-Windows
+    tag: $(APPVEYOR_REPO_TAG_NAME)
+    release: $(APPVEYOR_REPO_TAG_NAME)
+    description: 'Release $(APPVEYOR_REPO_TAG_NAME)'
+    auth_token:
+      secure: CP6qsCjIlyJrYsuHs4tzdrYUWOO83Jlx6/U0Gqtl/SicGmBaN1hrYUEk6RSL6D8j
+    draft: true
+    prerelease: true
+    force_update: true
+    on:
+      APPVEYOR_REPO_TAG: true
+  - provider: GitHub
+    name: SonicConvert-Windows32Bit
+    artifact: SonicConvert-Windows32Bit
+    tag: $(APPVEYOR_REPO_TAG_NAME)
+    release: $(APPVEYOR_REPO_TAG_NAME)
+    description: 'Release $(APPVEYOR_REPO_TAG_NAME)'
+    auth_token:
+      secure: CP6qsCjIlyJrYsuHs4tzdrYUWOO83Jlx6/U0Gqtl/SicGmBaN1hrYUEk6RSL6D8j
+    draft: true
+    prerelease: true
+    force_update: true
+    on:
+      APPVEYOR_REPO_TAG: true
+  - provider: GitHub
+    name: SonicConvert-Linux
+    artifact: SonicConvert-Linux
+    tag: $(APPVEYOR_REPO_TAG_NAME)
+    release: $(APPVEYOR_REPO_TAG_NAME)
+    description: 'Release $(APPVEYOR_REPO_TAG_NAME)'
+    auth_token:
+      secure: CP6qsCjIlyJrYsuHs4tzdrYUWOO83Jlx6/U0Gqtl/SicGmBaN1hrYUEk6RSL6D8j
+    draft: true
+    prerelease: true
+    force_update: true
+    on:
+      APPVEYOR_REPO_TAG: true
+  - provider: GitHub
+    name: SonicConvert-Windows-Standalone
+    artifact: SonicConvert-Windows-Standalone
+    tag: $(APPVEYOR_REPO_TAG_NAME)
+    release: $(APPVEYOR_REPO_TAG_NAME)
+    description: 'Release $(APPVEYOR_REPO_TAG_NAME)'
+    auth_token:
+      secure: CP6qsCjIlyJrYsuHs4tzdrYUWOO83Jlx6/U0Gqtl/SicGmBaN1hrYUEk6RSL6D8j
+    draft: true
+    prerelease: true
+    force_update: true
+    on:
+      APPVEYOR_REPO_TAG: true
+  - provider: GitHub
+    name: SonicConvert-Windows32Bit-Standalone
+    artifact: SonicConvert-Windows32Bit-Standalone
+    tag: $(APPVEYOR_REPO_TAG_NAME)
+    release: $(APPVEYOR_REPO_TAG_NAME)
+    description: 'Release $(APPVEYOR_REPO_TAG_NAME)'
+    auth_token:
+      secure: CP6qsCjIlyJrYsuHs4tzdrYUWOO83Jlx6/U0Gqtl/SicGmBaN1hrYUEk6RSL6D8j
+    draft: true
+    prerelease: true
+    force_update: true
+    on:
+      APPVEYOR_REPO_TAG: true
+  - provider: GitHub
+    name: SonicConvert-Linux-Standalone
+    artifact: SonicConvert-Linux-Standalone
+    tag: $(APPVEYOR_REPO_TAG_NAME)
+    release: $(APPVEYOR_REPO_TAG_NAME)
+    description: 'Release $(APPVEYOR_REPO_TAG_NAME)'
+    auth_token:
+      secure: CP6qsCjIlyJrYsuHs4tzdrYUWOO83Jlx6/U0Gqtl/SicGmBaN1hrYUEk6RSL6D8j
+    draft: true
+    prerelease: true
+    force_update: true
+    on:
+      APPVEYOR_REPO_TAG: true
   - provider: NuGet
     name: NugetPackages
     api_key:

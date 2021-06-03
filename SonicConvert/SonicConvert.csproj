@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <RuntimeIdentifiers>win-x86;win-x64;linux-x64;linux-arm64</RuntimeIdentifiers>
+    <Authors>Robert Schneckenhaus</Authors>
+    <Description>SonicArranger converter</Description>
+    <PackageProjectUrl>https://github.com/Pyrdacor/SonicArranger</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Pyrdacor/SonicArranger</RepositoryUrl>
+    <PackageTags>SonicArranger Amiga Tracker C#</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SonicArranger\SonicArranger.csproj" />
+  </ItemGroup>
+
+</Project>

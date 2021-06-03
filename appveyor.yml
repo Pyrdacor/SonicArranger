@@ -1,0 +1,30 @@
+environment:
+  matrix:
+    - APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2019
+    - APPVEYOR_BUILD_WORKER_IMAGE: Ubuntu
+
+platform: Any CPU
+configuration: Release
+
+before_build:
+  - dotnet restore SonicArranger.sln --verbosity normal
+
+build:
+  parallel: true
+  project: Ambermoon.net.sln
+
+artifacts:
+  - path: nuget\*.nupkg
+    name: NugetPackages
+
+after_build:
+    - ps: ./nuget.ps1
+
+test: off
+
+deploy:
+  - provider: NuGet
+    name: NugetPackages
+    api_key:
+      secure: UwVH6GHdh4zr7mDxC/HWXBQni/uzh36MV5lsXRmrgyyYEXJ67H63sI31QG4AByXY
+    skip_symbols: true

@@ -5,8 +5,10 @@ if ($isWindows) {
   dotnet publish -c Release "./SonicConvert/SonicConvert.csproj" -p:PublishSingleFile=true -r win-x86 --no-restore --nologo --no-self-contained
   dotnet publish -c Release "./SonicConvert/SonicConvert.csproj" -p:PublishSingleFile=true -r win-x64 --no-restore --nologo --no-self-contained
   Write-Host Pack zips for Windows
-  7z a SonicConvert-Windows.zip "SonicConvert\bin\Any CPU\Release\netcoreapp3.1\win-x64\publish\SonicConvert.exe"
-  7z a SonicConvert-Windows32Bit.zip "SonicConvert\bin\Any CPU\Release\netcoreapp3.1\win-x86\publish\SonicConvert.exe"
+  copy "SonicConvert\bin\Any CPU\Release\netcoreapp3.1\win-x64\publish\SonicConvert.exe" "SonicConvert\SonicConvert.exe"
+  7z a SonicConvert-Windows.zip "SonicConvert\SonicConvert.exe"
+  copy "SonicConvert\bin\Any CPU\Release\netcoreapp3.1\win-x86\publish\SonicConvert.exe" "SonicConvert\SonicConvert.exe"
+  7z a SonicConvert-Windows32Bit.zip "SonicConvert\SonicConvert.exe"
   Write-Host Publish Windows standalone executables
   dotnet publish -c Release "./SonicConvert/SonicConvert.csproj" -p:PublishSingleFile=true -r win-x86 --no-restore --nologo --self-contained
   dotnet publish -c Release "./SonicConvert/SonicConvert.csproj" -p:PublishSingleFile=true -r win-x64 --no-restore --nologo --self-contained

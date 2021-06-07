@@ -185,10 +185,10 @@ namespace SonicArranger
                 throw new ArgumentOutOfRangeException("Expected instrument index to be > 0.");
 
             var instrument = sonicArrangerFile.Instruments[instrumentIndex - 1];
+            playState.Instrument = instrument;
 
             ResetEffectState();
 
-            playState.Instrument = instrument;
             playState.NoteOff = false;
             playState.NoteVolume = instrument.Volume;
             playState.VibratoDelayCounter = instrument.VibDelay;
@@ -802,7 +802,7 @@ namespace SonicArranger
                     int startPos = instr.Effect2;
                     int stopPos = instr.Effect3;
                     var waveData = sonicArrangerFile.Waves[effectWave].Data;
-                    int offset = this.playState.CurrentEffectIndex;
+                    int offset = playState.CurrentEffectIndex;
 
                     for (int i = startPos; i <= stopPos; ++i)
                     {

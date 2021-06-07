@@ -220,7 +220,7 @@ namespace SonicArranger
                     return;
 
                 bool processTick = nextInterruptTime <= playTime;
-                
+
                 if (processTick)
                 {
                     if (divisionTick++ % songSpeed == 0)

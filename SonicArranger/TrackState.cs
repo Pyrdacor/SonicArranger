@@ -490,7 +490,7 @@ namespace SonicArranger
             if (adsrTotalLength != 0 && instrument.AdsrWave < sonicArrangerFile.AdsrWaves.Length)
             {
                 byte adsrData = sonicArrangerFile.AdsrWaves[instrument.AdsrWave].Data[playState.AdsrIndex];
-                int adsrVolume = (adsrData * instrument.Volume) >> 6;
+                int adsrVolume = (adsrData * paulaState.MasterVolume) >> 6;
                 volume = Math.Max(0, Math.Min(64, (volume * adsrVolume) >> 6));
                 playState.FadeOutVolume = volume * 4;
 
@@ -499,7 +499,9 @@ namespace SonicArranger
                     // Sustain mode
                     if (instrument.SustainVal != 0) // If 0, keep adsr index until noteId is no longer 0x80
                     {
-                        if (--playState.SustainCounter == 0)
+                        if (playState.SustainCounter != 0)
+                            --playState.SustainCounter;
+                        else
                         {
                             playState.SustainCounter = instrument.SustainVal;
                             ProcessAdsrTick();
@@ -576,10 +578,10 @@ namespace SonicArranger
                         int stopPos = instr.Effect3;
                         if (currentSample.Index >= startPos && currentSample.Index <= stopPos)
                         {
-                            if (currentSample.Sample == -128)
-                                currentSample.Sample = 127;
+                            if (currentSample[playState.CurrentEffectIndex] == -128)
+                                currentSample[playState.CurrentEffectIndex] = 127;
                             else
-                                currentSample.Sample = (sbyte)-currentSample.Sample;
+                                currentSample[playState.CurrentEffectIndex] = (sbyte)-currentSample[playState.CurrentEffectIndex];
                         }
                         break;
                     }
@@ -655,10 +657,8 @@ namespace SonicArranger
                         int startPos = instr.Effect2;
                         int stopPos = instr.Effect3;
                         int index = playState.CurrentEffectIndex;
-                        currentSample.Sample = unchecked((sbyte)sonicArrangerFile.Waves[instr.SampleWaveNo].Data[index]);
-                        if (stopPos <= index)
-                            index = startPos - 1;
-                        ++index;
+                        currentSample[index] = unchecked((sbyte)sonicArrangerFile.Waves[instr.SampleWaveNo].Data[index]);
+                        index = index >= stopPos ? startPos : index + 1;
                         currentSample[index] = unchecked((sbyte)-currentSample[index]);
                         break;
                     }
@@ -716,7 +716,7 @@ namespace SonicArranger
                         // which is the horizontal screen position of the beam
                         // and then uses: currentSample = hBeamPos ^ currentSample
                         var random = new Random(DateTime.Now.Millisecond);
-                        currentSample[this.playState.CurrentEffectIndex] = (sbyte)random.Next(-128, 128);
+                        currentSample[playState.CurrentEffectIndex] = (sbyte)random.Next(-128, 128);
                         break;
                     }
                     case Instrument.Effect.LowPassFilter1:

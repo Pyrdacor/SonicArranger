@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace SonicArranger
+﻿namespace SonicArranger
 {
 	public struct Note
 	{

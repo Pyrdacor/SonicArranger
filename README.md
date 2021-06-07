@@ -23,6 +23,8 @@ Version | Normal | Standalone
 
 The standalone versions should work without .NET installed but are larger in size.
 
+[![Build status](https://ci.appveyor.com/api/projects/status/iieprvdbq1hdp1uc?svg=true)](https://ci.appveyor.com/project/Pyrdacor/sonicarranger)
+
 #### Changlog
 
 - 1.1: Fixed several effects (wave negator, vibrato with delay 0, etc)

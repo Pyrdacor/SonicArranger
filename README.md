@@ -2,6 +2,14 @@
 
 Cross-platform SonicArranger reader/converter
 
+### Documentation
+
+All the docs can be found [here](Docs).
+- [General file format](Docs/NormalFileFormat.md)
+- [Packed file format](Docs/PackedFileFormat.md)
+- [Note commands](Docs/NoteCommands.md)
+- *to be continued ...*
+
 
 ### SonicConvert
 

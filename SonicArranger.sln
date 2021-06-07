@@ -15,7 +15,14 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		README.md = README.md
 	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SonicConvert", "SonicConvert\SonicConvert.csproj", "{6D7E6A42-CA67-44C4-B6CB-EEBC54B4D407}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SonicConvert", "SonicConvert\SonicConvert.csproj", "{6D7E6A42-CA67-44C4-B6CB-EEBC54B4D407}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Docs", "Docs", "{3F4936A0-371D-4DBC-8166-572BE85D4B0C}"
+	ProjectSection(SolutionItems) = preProject
+		Docs\NormalFileFormat.md = Docs\NormalFileFormat.md
+		Docs\NoteCommands.md = Docs\NoteCommands.md
+		Docs\PackedFileFormat.md = Docs\PackedFileFormat.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -34,6 +41,9 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{3F4936A0-371D-4DBC-8166-572BE85D4B0C} = {86CC5F4E-B61F-4617-97EE-2515909556AB}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {4806A22C-1D69-4204-85B5-FFD3FDFED54E}

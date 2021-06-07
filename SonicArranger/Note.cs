@@ -4,21 +4,6 @@ namespace SonicArranger
 {
 	public struct Note
 	{
-		[Flags]
-		public enum NoteFlags
-        {
-			/// <summary>
-			/// If set the note's value can't be changed
-			/// by a voice's note transpose.
-			/// </summary>
-			DisableNoteTranspose = 4,
-			/// <summary>
-			/// If set the note's instrument can't be changed
-			/// by a voice's sound transpose.
-			/// </summary>
-			DisableSoundTranspose = 8
-        }
-
 		public enum NoteCommand
         {
 			None = 0x0,
@@ -41,17 +26,27 @@ namespace SonicArranger
 
 		public byte Value { get; private set; }
 		public byte Instrument { get; private set; }
-		public NoteFlags Flags { get; private set; }
 		public NoteCommand Command { get; private set; }
 		public int ArpeggioIndex { get; private set; }
 		public byte CommandInfo { get; private set; }
+		/// <summary>
+		/// If set the note's instrument can't be changed
+		/// by a voice's sound transpose.
+		/// </summary>
+		public bool DisableSoundTranspose { get; private set; }
+		/// <summary>
+		/// If set the note's value can't be changed
+		/// by a voice's note transpose.
+		/// </summary>
+		public bool DisableNoteTranspose { get; private set; }
 
 		internal Note(ICustomReader reader) : this()
 		{
 			Value = reader.ReadByte();
 			Instrument = reader.ReadByte();
 			var flagsAndCommand = reader.ReadByte();
-			Flags = (NoteFlags)((flagsAndCommand >> 4) & 0xc);
+			DisableSoundTranspose = (flagsAndCommand & 0x80) != 0;
+			DisableNoteTranspose = (flagsAndCommand & 0x40) != 0;
 			ArpeggioIndex = (flagsAndCommand >> 4) & 0x3;
 			Command = (NoteCommand)(flagsAndCommand & 0xf);
 			CommandInfo = reader.ReadByte();

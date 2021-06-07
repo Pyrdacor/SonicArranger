@@ -172,7 +172,7 @@ namespace SonicArranger
                     paulaState.UseLowPassFilter = param == 0;
                     break;
                 case Note.NoteCommand.SetSpeed:
-                    songSpeed = Math.Min((int)param, 16);
+                    songSpeed = Math.Max(1, Math.Min((int)param, 16));
                     break;
                 default:
                     throw new ArgumentOutOfRangeException("Invalid note command.");
@@ -236,7 +236,6 @@ namespace SonicArranger
         {
             int noteId = note.Value;
             int noteInstrument = note.Instrument;
-            var noteFlags = note.Flags;
             playState.CurrentNote = note;
             playState.DivisionTick = 0;
 
@@ -257,11 +256,11 @@ namespace SonicArranger
                     }
                     else
                     {
-                        if (!noteFlags.HasFlag(Note.NoteFlags.DisableNoteTranspose))
+                        if (!note.DisableNoteTranspose)
                             noteId += noteTranspose;
                         if (noteId > 9 * 12)
                             throw new ArgumentOutOfRangeException(nameof(noteId));
-                        if (noteInstrument != 0 && !noteFlags.HasFlag(Note.NoteFlags.DisableSoundTranspose))
+                        if (noteInstrument != 0 && !note.DisableSoundTranspose)
                             noteInstrument += soundTranspose;
                         playState.LastNoteIndex = playState.CurrentNoteIndex;
                         playState.CurrentNoteIndex = noteId;
@@ -398,7 +397,7 @@ namespace SonicArranger
             else
             {
                 // Arpeggio
-                var arpeggio = instrument.ArpegData[note.ArpeggioIndex];
+                var arpeggio = instrument.ArpegData[note.ArpeggioIndex - 1];
                 int arpeggioTotalLength = Math.Min(14, arpeggio.Length + arpeggio.Repeat);
                 int index = playState.CurrentArpeggioIndex;
                 int noteOffset = index >= arpeggio.Data.Length ? 0 : arpeggio.Data[index];
@@ -432,7 +431,7 @@ namespace SonicArranger
             // Vibrato effect
             if (playState.VibratoDelayCounter != -1)
             {
-                if (--playState.VibratoDelayCounter == 0)
+                if (playState.VibratoDelayCounter == 0)
                 {
                     playState.VibratoDelayCounter = instrument.VibDelay;
 
@@ -442,6 +441,10 @@ namespace SonicArranger
                     }
 
                     playState.VibratoIndex = (playState.VibratoIndex + playState.VibratoSpeed) & 0xff;
+                }
+                else
+                {
+                    --playState.VibratoDelayCounter;
                 }
             }
 

@@ -15,11 +15,10 @@ namespace SonicArranger
         double playTime = 0.0; // in seconds
         double nextInterruptTime = 0.0;
         readonly double interruptDelay = 0.020; // 20 ms by default
-        double nextNoteTime = 0.0;
-        double noteDuration = 0.120;
         int songSpeed = 6;
         int patternIndex = 0;
         int noteIndex = 0;
+        int divisionTick = 0;
         long? endOfStreamIndex = null;
         long processedAmount = 0;
         public int LoopCounter { get; private set; } = 0;
@@ -81,14 +80,16 @@ namespace SonicArranger
             if (initialized)
                 return;
 
+            if (song.SongSpeed < 1 || song.SongSpeed > 16)
+                throw new ArgumentOutOfRangeException("Song speed was outside the valid range of 1 to 16.");
+
             paulaState.Reset(allowLowPassFilter, pal);
             playTime = 0.0;
             nextInterruptTime = 0.0;
-            nextNoteTime = 0.0;
-            noteDuration = song.GetNoteDuration(song.SongSpeed);
             songSpeed = song.SongSpeed;
             patternIndex = song.StartPos;
             noteIndex = 0;
+            divisionTick = 0;
             endOfStreamIndex = null;
             processedAmount = 0;
             LoopCounter = 0;
@@ -218,9 +219,12 @@ namespace SonicArranger
                 if (endOfStreamIndex != null && endOfStreamIndex == processedAmount + bufferIndex)
                     return;
 
-                if (nextNoteTime <= playTime)
+                bool processTick = nextInterruptTime <= playTime;
+                
+                if (processTick)
                 {
-                    ProcessNotes();                    
+                    if (divisionTick++ % songSpeed == 0)
+                        ProcessNotes();
                 }
 
                 for (int i = 0; i < PaulaState.NumTracks; ++i)
@@ -228,7 +232,7 @@ namespace SonicArranger
                     paulaState.UpdateCurrentSample(i, playTime);
                 }
 
-                if (nextInterruptTime <= playTime)
+                if (processTick)
                 {
                     for (int i = 0; i < PaulaState.NumTracks; ++i)
                         tracks[i].Tick(songSpeed);
@@ -261,21 +265,14 @@ namespace SonicArranger
                 {
                     var voice = sonicArrangerFile.Voices[patternIndex * 4 + i];
                     var note = sonicArrangerFile.Notes[voice.NoteAddress + noteIndex];
-                    int speed = songSpeed;
                     tracks[i].Play(note, voice.NoteTranspose, voice.SoundTranspose, playTime);
-                    tracks[i].ProcessNoteCommand(note.Command, note.CommandInfo, ref speed,
+                    tracks[i].ProcessNoteCommand(note.Command, note.CommandInfo, ref songSpeed,
                         patternIndex, out var trackNoteChangeIndex, out var trackPatternChangeIndex);
 
                     if (trackNoteChangeIndex != null)
                         noteChangeIndex = trackNoteChangeIndex;
                     if (trackPatternChangeIndex != null)
                         patternChangeIndex = trackPatternChangeIndex;
-
-                    if (speed != songSpeed)
-                    {
-                        songSpeed = speed;
-                        noteDuration = song.GetNoteDuration(speed);
-                    }
                 }
 
                 if (noteChangeIndex != null)
@@ -308,12 +305,10 @@ namespace SonicArranger
                     else
                     {
                         // one full note till the end which lasts for noteDuration
-                        int remainingSamples = (int)(noteDuration * sampleRate);
+                        int remainingSamples = (int)(song.GetNoteDuration(songSpeed) * sampleRate);
                         endOfStreamIndex = processedAmount + bufferIndex + remainingSamples * (stereo ? 2 : 1) - 1;
                     }
                 }
-
-                nextNoteTime += noteDuration;
             }
         }
     }

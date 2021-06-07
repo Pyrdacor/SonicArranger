@@ -113,7 +113,7 @@ namespace SonicArranger
 
             switch (command)
             {
-                case Note.NoteCommand.None:
+                case Note.NoteCommand.Arpeggio:
                 case Note.NoteCommand.Unused:
                     break;
                 case Note.NoteCommand.SlideUp: // smoothly reduce note period, increases pitch
@@ -574,15 +574,10 @@ namespace SonicArranger
                         return;
                     case Instrument.Effect.WaveNegator:
                     {
-                        int startPos = instr.Effect2;
-                        int stopPos = instr.Effect3;
-                        if (currentSample.Index >= startPos && currentSample.Index <= stopPos)
-                        {
-                            if (currentSample[playState.CurrentEffectIndex] == -128)
-                                currentSample[playState.CurrentEffectIndex] = 127;
-                            else
-                                currentSample[playState.CurrentEffectIndex] = (sbyte)-currentSample[playState.CurrentEffectIndex];
-                        }
+                        if (currentSample[playState.CurrentEffectIndex] == -128)
+                            currentSample[playState.CurrentEffectIndex] = 127;
+                        else
+                            currentSample[playState.CurrentEffectIndex] = (sbyte)-currentSample[playState.CurrentEffectIndex];
                         break;
                     }
                     case Instrument.Effect.FreeNegator:

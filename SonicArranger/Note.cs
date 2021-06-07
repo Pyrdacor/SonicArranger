@@ -4,7 +4,7 @@
 	{
 		public enum NoteCommand
         {
-			None = 0x0,
+			Arpeggio = 0x0,
 			SlideUp = 0x1,
 			SetADSRIndex = 0x2,
 			Unused = 0x3,

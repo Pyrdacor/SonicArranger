@@ -27,7 +27,7 @@ The standalone versions should work without .NET installed but are larger in siz
 
 #### Changlog
 
-- 1.4: Fixed an issue with the effect index which lead to crashes in some cases
+- 1.4: Fixed an issue with the effect index which lead to crashes in some cases, new hardware LPF emu
 - 1.3: Library adjustments, no new features or bugfixes though
 - 1.2: Fixed wrong instrument bug (and also an associated crash)
 - 1.1: Fixed several effects (wave negator, vibrato with delay 0, etc)

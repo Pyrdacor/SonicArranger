@@ -115,10 +115,11 @@ namespace SonicArranger
 
             public sbyte this[int index]
             {
-                get => currentTrackState.Data == null ? (sbyte)0 : unchecked((sbyte)currentTrackState.Data[index]);
+                get => currentTrackState.Data == null || index >= currentTrackState.Data.Length
+                    ? (sbyte)0 : unchecked((sbyte)currentTrackState.Data[index]);
                 set
                 {
-                    if (currentTrackState.Data != null)
+                    if (currentTrackState.Data != null && index < currentTrackState.Data.Length)
                         currentTrackState.Data[index] = unchecked((byte)value);
                 }
             }
@@ -227,37 +228,62 @@ namespace SonicArranger
 
         class LowPassFilter
         {
-            // The original filter will start decreasing the amplitude at 4kHz.
-            // At 7kHz no amplitude is left. We try to mimick the 4kHz cutoff here.
-            const double CutOffFrequency = 4000.0; // 4kHz
-            double? startTime = null;
-            bool initialized = false;
-            double e;
-            double output = 0.0;
+            // According to Amiga hardware manual the hardward audio low-pass filter
+            // starts decreasing frequencies starting at 4kHz and won't let any
+            // frequencies above 7kHz through. But more precisely it's a -12dB/oct
+            // (second order) Butterworth low-pass filter with a cutoff frequency of
+            // around 3.3kHz.
+            //
+            // Amiga 1200       | 6 dB/oct    | 28867 Hz , As is
+            // Amiga 1200 (LED) | 2x12 dB/oct | 3275 Hz , Butterworth
+            //
+            // | 2nd-order Butterworth s-domain coefficients are: |
+            // |                                                  |
+            // | b0 = 1.0  b1 = 0        b2 = 0                   |
+            // | a0 = 1    a1 = sqrt(2)  a2 = 1                   |
+            // |                                                  |
+            const double CutOffFrequency = 3275.0; // 3.275kHz
+
+
+            double[] lastInputs = new double[2];
+            double[] lastOutputs = new double[2];
+            const double b0 = 1.0;
+            const double a0 = 1.0;
+            const double a1 = 1.41421;
+            const double a2 = 1.0;
+            const double omega0 = 2.0 * Math.PI * CutOffFrequency / 44100.0;
+            readonly double q, r, s, t, u;
+
+            public LowPassFilter()
+            {
+                double k = omega0 / Math.Tan(0.5 * omega0 * 44100.0);
+                double k2 = k * k;
+                double d = a0 * k2 + a1 * k + a2;
+
+                q = (b0 * k2) / d;
+                r = (-2.0 * b0 * k2) / d;
+                s = q;
+                t = (2.0 * a2 - 2.0 * a0 * k2) / d;
+                u = (a0 * k2 - a1 * k + a2) / d;
+            }
 
             public void Reset()
             {
-                startTime = null;
-                initialized = false;
+                lastInputs[0] = 0;
+                lastInputs[1] = 0;
+                lastOutputs[0] = 0;
+                lastOutputs[1] = 0;
             }
 
-            public double Filter(double value, double currentPlaybackTime)
+            public double Filter(double value)
             {
-                if (!initialized)
-                {
-                    if (startTime == null)
-                    {
-                        startTime = currentPlaybackTime;
-                        return value;
-                    }
-                    else
-                    {
-                        double deltaTime = currentPlaybackTime - startTime.Value;
-                        e = 1.0 - Math.Exp(-deltaTime * 2.0 * Math.PI * CutOffFrequency);
-                        initialized = true;
-                    }
-                }
-                output += (value - output) * e;
+                double output = q * value + r * lastInputs[1] + s * lastInputs[0] - t * lastOutputs[1] - u * lastOutputs[0];
+
+                lastInputs[0] = lastInputs[1];
+                lastInputs[1] = value;
+                lastOutputs[0] = lastOutputs[1];
+                lastOutputs[1] = output;
+
                 return output;
             }
         }
@@ -380,7 +406,7 @@ namespace SonicArranger
                 output += ProcessTrack(i, currentPlaybackTime);
 
             if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilterLeft.Filter(output, currentPlaybackTime);
+                output = lowPassFilterLeft.Filter(output);
 
             return Math.Max(-1.0, Math.Min(1.0, output));
         }
@@ -394,7 +420,7 @@ namespace SonicArranger
             output += ProcessTrack(3, currentPlaybackTime);
 
             if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilterLeft.Filter(output, currentPlaybackTime);
+                output = lowPassFilterLeft.Filter(output);
 
             return Math.Max(-1.0, Math.Min(1.0, output));
         }
@@ -408,7 +434,7 @@ namespace SonicArranger
             output += ProcessTrack(2, currentPlaybackTime);
 
             if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilterRight.Filter(output, currentPlaybackTime);
+                output = lowPassFilterRight.Filter(output);
 
             return Math.Max(-1.0, Math.Min(1.0, output));
         }

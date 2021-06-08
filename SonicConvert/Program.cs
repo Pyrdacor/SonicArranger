@@ -207,7 +207,7 @@ namespace SonicConvert
 
             try
             {
-                WriteWave(outFile, saStream.ToArray(numLoops), (uint)sampleRate, stereo);
+                WriteWave(outFile, saStream.ToSignedArray(numLoops), (uint)sampleRate, stereo);
             }
             catch
             {

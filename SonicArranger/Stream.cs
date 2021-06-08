@@ -110,11 +110,14 @@ namespace SonicArranger
         /// to read further even if loop is then set to true.
         /// 
         /// Best use the same loop option for the whole stream reading.
+        /// 
+        /// The data is signed so a value of 0 is an output level of 0 and the rest is interpreted as a two-complement
+        /// signed value. This is how WAV stores 8-bit PCM data.
         /// </summary>
         /// <param name="milliSeconds">Time in milliseconds to read.</param>
         /// <param name="loop">If set the track is looped when reaching the end.</param>
         /// <returns></returns>
-        public byte[] Read(int milliSeconds, bool loop)
+        public byte[] ReadSigned(int milliSeconds, bool loop)
         {
             lock (readMutex)
             {
@@ -173,12 +176,43 @@ namespace SonicArranger
         }
 
         /// <summary>
+        /// Reads the next n milliseconds of sound data.
+        /// 
+        /// Note: If loop is set to false the returned data might have a lower size
+        /// when reaching the end or even can be empty when already at the end.
+        /// 
+        /// In case the end is reached without the loop option it is not possible
+        /// to read further even if loop is then set to true.
+        /// 
+        /// Best use the same loop option for the whole stream reading.
+        /// 
+        /// The data is unsigned so a value of 128 is an output level of 0. This is how libraries like OpenAL
+        /// treat 8-bit PCM data.
+        /// </summary>
+        /// <param name="milliSeconds">Time in milliseconds to read.</param>
+        /// <param name="loop">If set the track is looped when reaching the end.</param>
+        /// <returns></returns>
+        public byte[] ReadUnsigned(int milliSeconds, bool loop)
+        {
+            var signed = ReadSigned(milliSeconds, loop);
+            byte[] data = new byte[signed.Length];
+
+            for (int i = 0; i < data.Length; ++i)
+                data[i] = (byte)(signed[i] + 128);
+
+            return data;
+        }
+
+        /// <summary>
         /// Writes the stream data to the given output stream.
+        /// 
+        /// The data is signed so a value of 0 is an output level of 0 and the rest is interpreted as a two-complement
+        /// signed value. This is how WAV stores 8-bit PCM data.
         /// </summary>
         /// <param name="stream">Output stream to write to.</param>
         /// <param name="maxLoops">Max number of loops (0 means no looping). Is limited to 100 for safety reasons.</param>
         /// <param name="reset">If set the stream is reset to the beginning first.</param>
-        public void WriteTo(System.IO.Stream stream, int maxLoops = 0, bool reset = true)
+        public void WriteSignedTo(System.IO.Stream stream, int maxLoops = 0, bool reset = true)
         {
             if (maxLoops > 100)
                 throw new ArgumentOutOfRangeException("Max loop count is limited to 100 to avoid unintended harddrive floating.");
@@ -190,7 +224,34 @@ namespace SonicArranger
 
                 while (!EndOfStream)
                 {
-                    var data = Read(1000, maxLoops > LoopCounter);
+                    var data = ReadSigned(1000, maxLoops > LoopCounter);
+                    stream.Write(data, 0, data.Length);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Writes the stream data to the given output stream.
+        /// 
+        /// The data is unsigned so a value of 128 is an output level of 0. This is how libraries like OpenAL
+        /// treat 8-bit PCM data.
+        /// </summary>
+        /// <param name="stream">Output stream to write to.</param>
+        /// <param name="maxLoops">Max number of loops (0 means no looping). Is limited to 100 for safety reasons.</param>
+        /// <param name="reset">If set the stream is reset to the beginning first.</param>
+        public void WriteUnsignedTo(System.IO.Stream stream, int maxLoops = 0, bool reset = true)
+        {
+            if (maxLoops > 100)
+                throw new ArgumentOutOfRangeException("Max loop count is limited to 100 to avoid unintended harddrive floating.");
+
+            lock (copyMutex)
+            {
+                if (reset)
+                    Reset();
+
+                while (!EndOfStream)
+                {
+                    var data = ReadUnsigned(1000, maxLoops > LoopCounter);
                     stream.Write(data, 0, data.Length);
                 }
             }
@@ -198,14 +259,33 @@ namespace SonicArranger
 
         /// <summary>
         /// Provides the stream data as a byte array.
+        /// 
+        /// The data is signed so a value of 0 is an output level of 0 and the rest is interpreted as a two-complement
+        /// signed value. This is how WAV stores 8-bit PCM data.
         /// </summary>
         /// <param name="maxLoops">Max number of loops (0 means no looping). Is limited to 100 for safety reasons.</param>
         /// <param name="reset">If set the stream is reset to the beginning first.</param>
         /// <returns></returns>
-        public byte[] ToArray(int maxLoops = 0, bool reset = true)
+        public byte[] ToSignedArray(int maxLoops = 0, bool reset = true)
         {
             var memoryStream = new System.IO.MemoryStream();
-            WriteTo(memoryStream, maxLoops, reset);
+            WriteSignedTo(memoryStream, maxLoops, reset);
+            return memoryStream.ToArray();
+        }
+
+        /// <summary>
+        /// Provides the stream data as a byte array.
+        /// 
+        /// The data is unsigned so a value of 128 is an output level of 0. This is how libraries like OpenAL
+        /// treat 8-bit PCM data.
+        /// </summary>
+        /// <param name="maxLoops">Max number of loops (0 means no looping). Is limited to 100 for safety reasons.</param>
+        /// <param name="reset">If set the stream is reset to the beginning first.</param>
+        /// <returns></returns>
+        public byte[] ToUnsignedArray(int maxLoops = 0, bool reset = true)
+        {
+            var memoryStream = new System.IO.MemoryStream();
+            WriteUnsignedTo(memoryStream, maxLoops, reset);
             return memoryStream.ToArray();
         }
 

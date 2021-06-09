@@ -77,8 +77,9 @@ namespace SonicArranger
 	/// </summary>
 	public class SonicArrangerFile
 	{
-		public string Author { get; private set; }
+		public string Owner { get; private set; }
 		public string Version { get; private set; }
+		public EditData EditData { get; private set; }
 
 		public Song[] Songs { get; private set; }
 		public Voice[] Voices { get; private set; }
@@ -235,7 +236,7 @@ namespace SonicArranger
 					}
 				}
 
-				Author = Encoding.ASCII.GetString(authorBytes.ToArray());
+				Owner = Encoding.ASCII.GetString(authorBytes.ToArray());
 				Version = "V1.0";
 			}
 			else
@@ -259,8 +260,49 @@ namespace SonicArranger
 						case "INST":
 							Instruments = new InstrumentTable(reader).Instruments;
 							break;
+						case "SD8B":
+							Samples = new SampleTable(reader).Samples;
+							break;
+						case "SYWT":
+						{
+							int numTables = reader.ReadBEInt32();
+							if (numTables > 0)
+							{
+								Waves = new WaveTable[numTables];
+								for (int i = 0; i < numTables; ++i)
+									Waves[i] = new WaveTable(reader);
+							}
+							break;
+						}
+						case "SYAR":
+						{
+							int numTables = reader.ReadBEInt32();
+							if (numTables > 0)
+							{
+								AdsrWaves = new WaveTable[numTables];
+								for (int i = 0; i < numTables; ++i)
+									AdsrWaves[i] = new WaveTable(reader);
+							}
+							break;
+						}
+						case "SYAF":
+						{
+							int numTables = reader.ReadBEInt32();
+							if (numTables > 0)
+							{
+								AmfWaves = new WaveTable[numTables];
+								for (int i = 0; i < numTables; ++i)
+									AmfWaves[i] = new WaveTable(reader);
+							}
+							break;
+						}
+						case "EDAT":
+                        {
+							EditData = new EditData(reader);
+							return; // Should be the last chunk
+                        }
 						default:
-							return;
+							throw new FormatException("Invalid SonicArranger module format.");
 					}
 				}
 			}

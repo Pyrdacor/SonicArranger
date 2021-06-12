@@ -16,6 +16,7 @@ namespace SonicConvert
             Console.WriteLine(" -n: Use NTSC frequency (default: PAL)");
             Console.WriteLine(" -r<n>: Set output sample rate in Hz to n (default: 44100)");
             Console.WriteLine(" -s: Stereo \"LRRL\" (default: mono)");
+            Console.WriteLine(" -q: 4 Channel Output (default: mono)");
             Console.WriteLine(" -d: Disable low pass filter (default: active)");
             Console.WriteLine(" -t<n>: Track/song index (default: 0)");
             Console.WriteLine(" -l<n>: Num track loops (default: 0 -> play once)");
@@ -28,7 +29,7 @@ namespace SonicConvert
             string wavPath = null;
             int sampleRate = 44100;
             bool pal = true;
-            bool stereo = false;
+            SonicArranger.Stream.ChannelMode channelMode = SonicArranger.Stream.ChannelMode.Mono;
             bool enableLPF = true;
             int song = 0;
             int numLoops = 0;
@@ -66,7 +67,10 @@ namespace SonicConvert
                             pal = false;
                             break;
                         case 's':
-                            stereo = true;
+                            channelMode = SonicArranger.Stream.ChannelMode.Stereo;
+                            break;
+                        case 'q':
+                            channelMode = SonicArranger.Stream.ChannelMode.Quad;
                             break;
                         case 'd':
                             enableLPF = false;
@@ -183,7 +187,7 @@ namespace SonicConvert
 
             try
             {
-                saStream = new SonicArranger.Stream(saFile, song, (uint)sampleRate, stereo, enableLPF, pal);
+                saStream = new SonicArranger.Stream(saFile, song, (uint)sampleRate, channelMode, enableLPF, pal);
             }
             catch
             {
@@ -207,7 +211,7 @@ namespace SonicConvert
 
             try
             {
-                WriteWave(outFile, saStream.ToSignedArray(numLoops), (uint)sampleRate, stereo);
+                WriteWave(outFile, saStream.ToSignedArray(numLoops), (uint)sampleRate, channelMode);
             }
             catch
             {
@@ -225,10 +229,10 @@ namespace SonicConvert
             Environment.Exit(0);
         }
 
-        static void WriteWave(System.IO.Stream stream, byte[] data, uint sampleRate, bool stereo)
+        static void WriteWave(System.IO.Stream stream, byte[] data, uint sampleRate, SonicArranger.Stream.ChannelMode channelMode)
         {
             uint numsamples = (uint)data.Length;
-            ushort numchannels = (ushort)(stereo ? 2 : 1);
+            ushort numchannels = (ushort)channelMode;
             ushort samplelength = 1; // in bytes
 
             using var wr = new BinaryWriter(stream, System.Text.Encoding.UTF8, true);

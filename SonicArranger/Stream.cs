@@ -4,10 +4,16 @@ namespace SonicArranger
 {
     public class Stream
     {
+        public enum ChannelMode {
+            Mono = 1,
+            Stereo = 2,
+            Quad = 4
+        }
+
         readonly SonicArrangerFile sonicArrangerFile;
         readonly Song song;
         readonly uint sampleRate;
-        readonly bool stereo;
+        readonly ChannelMode channelMode;
         readonly byte[] buffer;
         int bufferSampleIndex = 0;
         readonly PaulaState paulaState = new PaulaState();
@@ -39,7 +45,7 @@ namespace SonicArranger
         /// <param name="stereo">If active the LRRL channel pattern is used</param>
         /// <param name="allowAmigaLowPassFilter">Allows the Amiga hardware LPF emulation</param>
         /// <param name="pal">If active the PAL frequency is used, otherwise the NTSC frequency is used.</param>
-        public Stream(SonicArrangerFile sonicArrangerFile, int song, uint sampleRate, bool stereo,
+        public Stream(SonicArrangerFile sonicArrangerFile, int song, uint sampleRate, ChannelMode channelMode,
             bool allowAmigaLowPassFilter = true, bool pal = true)
         {
             if (sonicArrangerFile == null)
@@ -53,7 +59,7 @@ namespace SonicArranger
 
             this.sonicArrangerFile = sonicArrangerFile;
             this.sampleRate = sampleRate;
-            this.stereo = stereo;
+            this.channelMode = channelMode;
             this.song = sonicArrangerFile.Songs[song];
             this.pal = pal;
             allowLowPassFilter = allowAmigaLowPassFilter;
@@ -62,7 +68,7 @@ namespace SonicArranger
                 throw new NotSupportedException("Number of interrupts must be in the range 1 to 200.");
 
             // We store 2 seconds of data
-            buffer = new byte[2 * sampleRate * (stereo ? 2 : 1)];
+            buffer = new byte[2 * sampleRate * (int) channelMode];
 
             interruptDelay = 1.0 / this.song.NBIrqps;
 
@@ -136,7 +142,7 @@ namespace SonicArranger
                     return new byte[0];
 
                 int numSamples = ((int)sampleRate * milliSeconds + 999) / 1000;
-                int sizePerSample = stereo ? 2 : 1;
+                int sizePerSample = (int) channelMode;
                 int bufferIndex = bufferSampleIndex * sizePerSample;
                 int size = numSamples * sizePerSample;
                 bool endOfStream = false;
@@ -320,14 +326,22 @@ namespace SonicArranger
                     nextInterruptTime += interruptDelay;
                 }
 
-                if (stereo)
+                if (channelMode == ChannelMode.Quad)
+                {
+                    for (int i = 0; i < 4; i++)
+                    {
+                        var channelData = paulaState.ProcessTrackOutput(i, playTime) * 128.0;
+                        buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(channelData))));
+                    }
+                }
+                else if (channelMode == ChannelMode.Stereo)
                 {
                     var left = paulaState.ProcessLeftOutput(playTime) * 128.0;
                     var right = paulaState.ProcessRightOutput(playTime) * 128.0;
                     buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(left))));
                     buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(right))));
                 }
-                else
+                else if (channelMode == ChannelMode.Mono)
                 {
                     var data = paulaState.Process(playTime) * 128.0;
                     buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(data))));
@@ -386,7 +400,7 @@ namespace SonicArranger
                     {
                         // one full note till the end which lasts for noteDuration
                         int remainingSamples = (int)(song.GetNoteDuration(songSpeed) * sampleRate);
-                        endOfStreamIndex = processedAmount + bufferIndex + remainingSamples * (stereo ? 2 : 1) - 1;
+                        endOfStreamIndex = processedAmount + bufferIndex + remainingSamples * ((int)channelMode) - 1;
                     }
                 }
             }

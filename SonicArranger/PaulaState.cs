@@ -149,8 +149,7 @@ namespace SonicArranger
             set;
         } = true;
         bool allowLowPassFilter = true;
-        readonly LowPassFilter lowPassFilterLeft = new LowPassFilter();
-        readonly LowPassFilter lowPassFilterRight = new LowPassFilter();
+        readonly LowPassFilter[] lowPassFilters = new LowPassFilter[4];
 
         public PaulaState()
         {
@@ -160,14 +159,21 @@ namespace SonicArranger
                 currentTrackStates[i] = new CurrentTrackState();
                 currentSamples[i] = new CurrentSample(currentTrackStates[i]);
             }
+            for (int i = 0; i < lowPassFilters.Length; ++i)
+            {
+                lowPassFilters[i] = new LowPassFilter();
+            }
         }
 
         public void Reset(bool allowLowPassFilter, bool pal)
         {
             this.allowLowPassFilter = allowLowPassFilter;
             clockFrequency = pal ? palClockFrequency : ntscClockFrequency;
-            lowPassFilterLeft.Reset();
-            lowPassFilterRight.Reset();
+
+            for (int i = 0; i < lowPassFilters.Length; ++i)
+            {
+                lowPassFilters[i].Reset();
+            }
 
             for (int i = 0; i < NumTracks; ++i)
             {
@@ -403,10 +409,10 @@ namespace SonicArranger
             double output = 0.0;
 
             for (int i = 0; i < NumTracks; ++i)
-                output += ProcessTrack(i, currentPlaybackTime);
+                output += 0.25 * ProcessTrack(i, currentPlaybackTime);
 
             if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilterLeft.Filter(output);
+                output = lowPassFilters[0].Filter(output);
 
             return Math.Max(-1.0, Math.Min(1.0, output));
         }
@@ -416,11 +422,11 @@ namespace SonicArranger
             double output = 0.0;
 
             // LRRL
-            output += ProcessTrack(0, currentPlaybackTime);
-            output += ProcessTrack(3, currentPlaybackTime);
+            output += 0.5 * ProcessTrack(0, currentPlaybackTime);
+            output += 0.5 * ProcessTrack(3, currentPlaybackTime);
 
             if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilterLeft.Filter(output);
+                output = lowPassFilters[0].Filter(output);
 
             return Math.Max(-1.0, Math.Min(1.0, output));
         }
@@ -430,11 +436,23 @@ namespace SonicArranger
             double output = 0.0;
 
             // LRRL
-            output += ProcessTrack(1, currentPlaybackTime);
-            output += ProcessTrack(2, currentPlaybackTime);
+            output += 0.5 * ProcessTrack(1, currentPlaybackTime);
+            output += 0.5 * ProcessTrack(2, currentPlaybackTime);
 
             if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilterRight.Filter(output);
+                output = lowPassFilters[1].Filter(output);
+
+            return Math.Max(-1.0, Math.Min(1.0, output));
+        }
+
+        public double ProcessTrackOutput(int trackIndex, double currentPlaybackTime)
+        {
+            double output = 0.0;
+            
+            output = ProcessTrack(trackIndex, currentPlaybackTime);
+
+            if (allowLowPassFilter && UseLowPassFilter)
+                output = lowPassFilters[trackIndex].Filter(output);
 
             return Math.Max(-1.0, Math.Min(1.0, output));
         }

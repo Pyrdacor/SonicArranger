@@ -4,7 +4,7 @@ Those files are size-optimized versions with only the information left that is n
 
 Often these files also contain a replayer in Amiga m68k code. We will get to that later.
 
-Note that all the data is stored as big-endian. Big-endian means the more significant bits come first. So the value 0x12345678 is stored as 0x12 0x34 0x56 0x78. This is not the case on systems like Windows or Linux where little-endian is used. So take care of this when reading values.
+Note that all the data is stored as big-endian. Big-endian means the more significant bytes come first. So the value 0x12345678 is stored as 0x12 0x34 0x56 0x78. This is not the case on systems like Windows or Linux where little-endian is used. So take care of this when reading values.
 
 **Type descriptions:**
 - **byte** is a 8-bit unsigned integer with the range 0..255
@@ -12,7 +12,7 @@ Note that all the data is stored as big-endian. Big-endian means the more signif
 - **ushort** is a 16-bit unsigned integer with the range 0..65535
 - **short** is a 16-bit signed integer with the range -32768..32767
 - **uint** is a 32-bit unsigned integer with the range 0..4294967295
-- Note that signed values are represented as two-complement.
+- Note that signed values are represented as two-complement. So for example for type char 0xff means -1 and 0x80 means -128.
 
 The file starts with a bunch of offsets. These offsets are relative to the start of the file data.
 

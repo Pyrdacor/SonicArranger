@@ -38,7 +38,6 @@ namespace SonicConvert
             {
                 if (arg == "-h" || arg == "--help" || arg == "/?")
                 {
-                    Console.WriteLine($"Invalid option '{arg}'.");
                     Usage();
                     Environment.Exit(-1);
                     return;

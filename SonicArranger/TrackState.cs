@@ -290,7 +290,9 @@ namespace SonicArranger
                                 Mute();
                                 return;
                             }
-                            state.Data = sonicArrangerFile.Waves[instrument.SampleWaveNo].Data;
+                            var data = sonicArrangerFile.Waves[instrument.SampleWaveNo].Data;
+                            state.Data = new byte[data.Length];
+                            Buffer.BlockCopy(data, 0, state.Data, 0, data.Length);
                         }
                         else
                         {
@@ -302,7 +304,9 @@ namespace SonicArranger
                                 Mute();
                                 return;
                             }
-                            state.Data = sonicArrangerFile.Samples[instrument.SampleWaveNo].Data;
+                            var data = sonicArrangerFile.Samples[instrument.SampleWaveNo].Data;
+                            state.Data = new byte[data.Length];
+                            Buffer.BlockCopy(data, 0, state.Data, 0, data.Length);
                         }
                         int length = instrument.Length * 2;
                         if (!instrument.SynthMode && instrument.Repeat > 1)
@@ -547,8 +551,8 @@ namespace SonicArranger
             playState.NoteVolume -= playState.VolumeChangePerTick;
 
             // Safety checks
-            if (period < 124)
-                period = 124;
+            if (period < 1)
+                period = 1;
             if (playState.NoteVolume < 0)
                 playState.NoteVolume = 0;
             if (playState.NoteVolume > 64)

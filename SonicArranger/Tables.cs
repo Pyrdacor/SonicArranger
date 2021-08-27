@@ -5,7 +5,7 @@
         /// <summary>
         /// Periods for 9 octaves.
         /// 12 notes are given in that order: C C# D D# E F F# G G# A A# B.
-        /// The value at index 0 is 0 and should note be used.
+        /// The value at index 0 is 0 and should not be used.
         /// Use an 1-based index into this table.
         /// 9 * 12 notes mean that 108 values are present. The array contains
         /// 110 like in the original implementation. The first was already

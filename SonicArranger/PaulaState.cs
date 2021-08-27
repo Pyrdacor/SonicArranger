@@ -301,7 +301,7 @@ namespace SonicArranger
 
             var data = currentTrackStates[trackIndex].Data;
 
-            if (data == null || Tracks[trackIndex].Period < 0.01)
+            if (data == null || Tracks[trackIndex].Period < 1)
                 return 0.0;
 
             var currentSample = currentSamples[trackIndex];

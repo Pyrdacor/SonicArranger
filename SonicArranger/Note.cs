@@ -13,7 +13,7 @@
 			SetMasterVolume = 0x6,
 			SetPortamento = 0x7,
 			ClearPortamento = 0x8,
-			Unknown9 = 0x9,
+			SetPatternLength = 0x9,
 			VolumeSlide = 0xa,
 			PositionJump = 0xb,
 			SetVolume = 0xc,

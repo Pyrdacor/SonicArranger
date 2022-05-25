@@ -146,7 +146,7 @@ namespace SonicArranger
                 case Note.NoteCommand.ClearPortamento:
                     playState.CurrentNotePortamentoPeriod = 0;
                     break;
-                case Note.NoteCommand.Unknown9:
+                case Note.NoteCommand.SetPatternLength:
                     // TODO
                     break;
                 case Note.NoteCommand.VolumeSlide:

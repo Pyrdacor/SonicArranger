@@ -68,7 +68,7 @@ namespace SonicArranger
                 throw new NotSupportedException("Number of interrupts must be in the range 1 to 200.");
 
             // We store 2 seconds of data
-            buffer = new byte[2 * sampleRate * (int) channelMode];
+            buffer = new byte[2 * sampleRate * (int)channelMode];
 
             interruptDelay = 1.0 / this.song.NBIrqps;
 
@@ -98,6 +98,7 @@ namespace SonicArranger
             divisionTick = 0;
             endOfStreamIndex = null;
             processedAmount = 0;
+            bufferSampleIndex = 0;
             LoopCounter = 0;
 
             // Load initial data

@@ -210,7 +210,7 @@ namespace SonicArranger
 
 				// Read samples
 				reader.Position = start + samplesOffset;
-				Samples = (sampleTable = new SampleTable(reader)).Samples;
+				Samples = (sampleTable = new SampleTable(reader, false)).Samples;
 
 				if (new string(reader.ReadChars(8)) != "deadbeef" ||
 					reader.ReadBEUInt32() != 0)
@@ -255,6 +255,9 @@ namespace SonicArranger
 				string tag;
 				while (true)
 				{
+					if (reader.Position == reader.Size)
+						break;
+
 					tag = new string(reader.ReadChars(4));
 					switch (tag)
 					{
@@ -271,7 +274,7 @@ namespace SonicArranger
 							Instruments = (instrumentTable = new InstrumentTable(reader)).Instruments;
 							break;
 						case "SD8B":
-							Samples = (sampleTable = new SampleTable(reader)).Samples;
+							Samples = (sampleTable = new SampleTable(reader, true)).Samples;
 							break;
 						case "SYWT":
 						{
@@ -309,12 +312,24 @@ namespace SonicArranger
 						case "EDAT":
                         {
 							EditData = new EditData(reader);
-							return; // Should be the last chunk
+							break;
                         }
 						default:
 							throw new FormatException("Invalid SonicArranger module format.");
 					}
 				}
+
+				if (Samples == null)
+				{
+					Samples = new Sample[0];
+					sampleTable = new SampleTable(Samples);
+				}
+				if (Waves == null)
+					Waves = new WaveTable[0];
+				if (AdsrWaves == null)
+					AdsrWaves = new WaveTable[0];
+				if (AmfWaves == null)
+					AmfWaves = new WaveTable[0];
 			}
 		}
 
@@ -375,6 +390,8 @@ namespace SonicArranger
 					writer.Write(Encoding.ASCII.GetBytes(header));
                 }
 
+				WriteHeader("SOAR");
+
 				WriteHeader((Version ?? "").PadRight(4, '\0')[0..4]);
 
 				// Songs
@@ -416,6 +433,7 @@ namespace SonicArranger
 					waveTable.Write(writer);
 
 				// Edit data
+				WriteHeader("EDAT");
 				(EditData ?? new EditData()).Write(writer);
 			}
 			else
@@ -437,7 +455,7 @@ namespace SonicArranger
 		{
 			using (var stream = new FileStream(file, FileMode.Create))
 			{
-				Save(file, editable);
+				Save(stream, editable);
 			}
 		}
 	}

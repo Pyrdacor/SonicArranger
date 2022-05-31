@@ -26,6 +26,14 @@ namespace SonicArranger
         /// </summary>
         public bool EnableVoice2 { get; set; }
         /// <summary>
+        /// Voice 3 state (on/off).
+        /// </summary>
+        public bool EnableVoice3 { get; set; }
+        /// <summary>
+        /// Voice 4 state (on/off).
+        /// </summary>
+        public bool EnableVoice4 { get; set; }
+        /// <summary>
         /// Currently selected play position (pattern editor).
         /// </summary>
         public short PlayPosition { get; set; }
@@ -52,9 +60,11 @@ namespace SonicArranger
 
         internal EditData(string version = null)
         {
-            Version = version?.PadRight(4, '\0') ?? "1.0\0";
+            Version = version?.PadRight(4, '\0') ?? "V1.1";
             EnableVoice1 = true;
             EnableVoice2 = true;
+            EnableVoice3 = true;
+            EnableVoice4 = true;
             PlayPosition = 0;
             SelectedPosition = 0;
             SelectedSong = 0;
@@ -66,8 +76,10 @@ namespace SonicArranger
         internal EditData(ICustomReader reader)
         {
             Version = new string(reader.ReadChars(4));
-            EnableVoice1 = reader.ReadBEInt16() != 0;
-            EnableVoice2 = reader.ReadBEInt16() != 0;
+            EnableVoice1 = reader.ReadByte() != 0;
+            EnableVoice2 = reader.ReadByte() != 0;
+            EnableVoice3 = reader.ReadByte() != 0;
+            EnableVoice4 = reader.ReadByte() != 0;
             PlayPosition = reader.ReadBEInt16();
             SelectedPosition = reader.ReadBEInt16();
             SelectedSong = reader.ReadBEInt16();
@@ -79,8 +91,10 @@ namespace SonicArranger
         internal void Write(System.IO.BinaryWriter writer)
         {
             writer.Write(Encoding.ASCII.GetBytes((Version ?? "").PadRight(4, '\0')[0..4]));
-            writer.WriteBEUInt16((ushort)(EnableVoice1 ? 1 : 0));
-            writer.WriteBEUInt16((ushort)(EnableVoice2 ? 1 : 0));
+            writer.Write((byte)(EnableVoice1 ? 1 : 0));
+            writer.Write((byte)(EnableVoice2 ? 1 : 0));
+            writer.Write((byte)(EnableVoice3 ? 1 : 0));
+            writer.Write((byte)(EnableVoice4 ? 1 : 0));
             writer.WriteBEInt16(PlayPosition);
             writer.WriteBEInt16(SelectedPosition);
             writer.WriteBEInt16(SelectedSong);

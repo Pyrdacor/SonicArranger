@@ -17,7 +17,7 @@
 
 		internal OverTable(Voice[] voices)
 		{
-			Count = voices.Length;
+			Count = voices.Length / 4;
 			Voices = voices;
 		}
 

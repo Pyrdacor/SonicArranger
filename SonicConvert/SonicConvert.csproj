@@ -9,7 +9,7 @@
     <PackageProjectUrl>https://github.com/Pyrdacor/SonicArranger</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Pyrdacor/SonicArranger</RepositoryUrl>
     <PackageTags>SonicArranger Amiga Tracker C#</PackageTags>
-    <Version>1.8.0</Version>
+    <Version>1.9.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -278,7 +278,7 @@ namespace SonicArranger
 			writer.WriteBEInt16(Volume);
 			writer.WriteBEInt16(FineTuning);
 			writer.WriteBEInt16(Portamento);
-			writer.WriteBEInt16(VibDelay);
+			writer.WriteBEInt16(VibDelay == -1 ? (short)255 : VibDelay);
 			writer.WriteBEInt16(VibSpeed);
 			writer.WriteBEInt16(VibLevel);
 			writer.WriteBEInt16(AmfWave);

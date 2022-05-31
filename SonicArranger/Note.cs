@@ -49,5 +49,19 @@
 			Command = (NoteCommand)(flagsAndCommand & 0xf);
 			CommandInfo = reader.ReadByte();
 		}
+
+		internal void Write(System.IO.BinaryWriter writer)
+		{
+			writer.Write(Value);
+			writer.Write(Instrument);
+			byte flagsAndCommand = (byte)((ArpeggioIndex & 0x3) << 4);
+			flagsAndCommand |= (byte)((int)Command & 0xf);
+			if (DisableSoundTranspose)
+				flagsAndCommand |= 0x80;
+			if (DisableNoteTranspose)
+				flagsAndCommand |= 0x40;
+			writer.Write(flagsAndCommand);
+			writer.Write(CommandInfo);
+		}
 	}
 }

@@ -14,6 +14,20 @@
 				Voices[i] = new Voice(reader);
 			}
 		}
+
+		internal OverTable(Voice[] voices)
+		{
+			Count = voices.Length;
+			Voices = voices;
+		}
+
+		internal void Write(System.IO.BinaryWriter writer)
+		{
+			writer.WriteBEInt32(Count);
+
+			foreach (var voice in Voices)
+				voice.Write(writer);
+		}
 	}
 
 }

@@ -11,6 +11,9 @@ namespace SonicConvert
         {
             Console.WriteLine();
             Console.WriteLine($"Usage: {nameof(SonicConvert)} <sapath> <wavpath> [options]");
+            Console.WriteLine("        Converts a sonic arranger file to wav.");
+            Console.WriteLine($"Usage: {nameof(SonicConvert)} dec <sapath> <soarpath>");
+            Console.WriteLine("        Converts a sonic arranger file to the editable version (soar).");
             Console.WriteLine();
             Console.WriteLine("Options:");
             Console.WriteLine(" -n: Use NTSC frequency (default: PAL)");
@@ -24,6 +27,40 @@ namespace SonicConvert
         }
 
         static void Main(string[] args)
+        {
+            if (args.Length == 3 && args[0].ToLower() == "dec")
+            {
+                SonicArrangerFile saFile;
+
+                try
+                {
+                    saFile = new SonicArrangerFile(File.OpenRead(args[1]));
+                }
+                catch
+                {
+                    Console.WriteLine("Failed to load sonic arranger file.");
+                    Environment.Exit(1);
+                    return;
+                }
+
+                try
+                {
+                    saFile.Save(args[2], true);
+                }
+                catch
+                {
+                    Console.WriteLine("Failed to save sonic arranger file.");
+                    Environment.Exit(1);
+                    return;
+                }
+            }
+            else
+            {
+                SaToWav(args);
+            }
+        }
+
+        static void SaToWav(string[] args)
         {
             string saPath = null;
             string wavPath = null;

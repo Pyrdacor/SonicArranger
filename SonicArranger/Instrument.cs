@@ -1,4 +1,6 @@
-﻿namespace SonicArranger
+﻿using System.Text;
+
+namespace SonicArranger
 {
 	public struct Instrument
 	{
@@ -139,7 +141,10 @@
 		/// have this set to 0.
 		/// </summary>
 		public short Repeat { get; private set; }
-		//8
+		/// <summary>
+		/// Unknown 8 bytes
+		/// </summary>
+		public byte[] Unknown8Bytes { get; private set; }
 		/// <summary>
 		/// Volume level (0 to 64).
 		/// </summary>
@@ -209,7 +214,10 @@
 		/// </summary>
 		public short SustainPt { get; private set; }
 		public short SustainVal { get; private set; }
-		//16
+		/// <summary>
+		/// Unknown 16 bytes
+		/// </summary>
+		public byte[] Unknown16Bytes { get; private set; }
 		public Effect EffectNumber { get; private set; }
 		public short Effect1 { get; private set; }
 		public short Effect2 { get; private set; }
@@ -226,7 +234,7 @@
 			SampleWaveNo = reader.ReadBEInt16();
 			Length = reader.ReadBEInt16();
 			Repeat = reader.ReadBEInt16();
-			reader.ReadBytes(8); // TODO
+			Unknown8Bytes = reader.ReadBytes(8); // TODO
 			Volume = reader.ReadBEInt16();
 			FineTuning = reader.ReadBEInt16();
 			Portamento = reader.ReadBEInt16();
@@ -245,7 +253,7 @@
 			AdsrRepeat = reader.ReadBEInt16();
 			SustainPt = reader.ReadBEInt16();
 			SustainVal = reader.ReadBEInt16();
-			reader.ReadBytes(16); // TODO
+			Unknown16Bytes = reader.ReadBytes(16); // TODO
 			Effect1 = reader.ReadBEInt16();
 			EffectNumber = (Effect)reader.ReadBEInt16();
 			Effect2 = reader.ReadBEInt16();
@@ -258,6 +266,42 @@
 				ArpegData[i] = new Arpeggiato(reader);
 			}
 			Name = new string(reader.ReadChars(30)).Split(new[] { '\0' }, 2)[0];
+		}
+
+		internal void Write(System.IO.BinaryWriter writer)
+		{
+			writer.WriteBEUInt16((ushort)(SynthMode ? 1 : 0));
+			writer.WriteBEInt16(SampleWaveNo);
+			writer.WriteBEInt16(Length);
+			writer.WriteBEInt16(Repeat);
+			writer.Write(Unknown8Bytes);
+			writer.WriteBEInt16(Volume);
+			writer.WriteBEInt16(FineTuning);
+			writer.WriteBEInt16(Portamento);
+			writer.WriteBEInt16(VibDelay);
+			writer.WriteBEInt16(VibSpeed);
+			writer.WriteBEInt16(VibLevel);
+			writer.WriteBEInt16(AmfWave);
+			writer.WriteBEInt16(AmfDelay);
+			writer.WriteBEInt16(AmfLength);
+			writer.WriteBEInt16(AmfRepeat);
+			writer.WriteBEInt16(AdsrWave);
+			writer.WriteBEInt16(AdsrDelay);
+			writer.WriteBEInt16(AdsrLength);
+			writer.WriteBEInt16(AdsrRepeat);
+			writer.WriteBEInt16(SustainPt);
+			writer.WriteBEInt16(SustainVal);
+			writer.Write(Unknown16Bytes);
+			writer.WriteBEInt16(Effect1);
+			writer.WriteBEInt16((short)EffectNumber);
+			writer.WriteBEInt16(Effect2);
+			writer.WriteBEInt16(Effect3);
+			writer.WriteBEInt16(EffectDelay);
+
+			foreach (var arp in ArpegData)
+				arp.Write(writer);
+
+			writer.Write(Encoding.ASCII.GetBytes((Name ?? "<unknown>").PadRight(30, '\0')[0..30]));
 		}
 
 		public override string ToString()

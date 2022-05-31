@@ -14,5 +14,21 @@
 				Songs[i] = new Song(reader);
 			}
 		}
+
+		internal SongTable(Song[] songs)
+        {
+			Count = songs.Length;
+			Songs = songs;
+        }
+
+		internal void Write(System.IO.BinaryWriter writer)
+        {
+			writer.WriteBEInt32(Count);
+
+			foreach (var song in Songs)
+            {
+				song.Write(writer);
+            }
+        }
 	}
 }

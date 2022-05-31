@@ -14,5 +14,21 @@
 				Instruments[i] = new Instrument(reader);
 			}
 		}
+
+		internal InstrumentTable(Instrument[] instruments)
+		{
+			Count = instruments.Length;
+			Instruments = instruments;
+		}
+
+		internal void Write(System.IO.BinaryWriter writer)
+		{
+			writer.WriteBEInt32(Count);
+
+			foreach (var instrument in Instruments)
+			{
+				instrument.Write(writer);
+			}
+		}
 	}
 }

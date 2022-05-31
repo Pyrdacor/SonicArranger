@@ -14,5 +14,21 @@
 				Notes[i] = new Note(reader);
 			}
 		}
+
+		internal NoteTable(Note[] notes)
+		{
+			Count = notes.Length;
+			Notes = notes;
+		}
+
+		internal void Write(System.IO.BinaryWriter writer)
+		{
+			writer.WriteBEInt32(Count);
+
+			foreach (var note in Notes)
+			{
+				note.Write(writer);
+			}
+		}
 	}
 }

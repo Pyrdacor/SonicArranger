@@ -12,5 +12,12 @@
 			Repeat = reader.ReadByte();
 			Data = reader.ReadBytes(14);
 		}
+
+		internal void Write(System.IO.BinaryWriter writer)
+		{
+			writer.Write(Length);
+			writer.Write(Repeat);
+			writer.Write(Data);
+		}
 	}
 }

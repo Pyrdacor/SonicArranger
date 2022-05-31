@@ -1,4 +1,6 @@
-﻿namespace SonicArranger
+﻿using System.Text;
+
+namespace SonicArranger
 {
     /// <summary>
     /// Editor data.
@@ -48,6 +50,19 @@
         /// </summary>
         public short PatternEditorRow { get; set; }
 
+        internal EditData(string version = null)
+        {
+            Version = version?.PadRight(4, '\0') ?? "1.0\0";
+            EnableVoice1 = true;
+            EnableVoice2 = true;
+            PlayPosition = 0;
+            SelectedPosition = 0;
+            SelectedSong = 0;
+            Unknown = 0;
+            PatternEditorVoice = 0;
+            PatternEditorRow = 0;
+        }
+
         internal EditData(ICustomReader reader)
         {
             Version = new string(reader.ReadChars(4));
@@ -59,6 +74,19 @@
             Unknown = reader.ReadBEInt16();
             PatternEditorVoice = reader.ReadBEInt16();
             PatternEditorRow = reader.ReadBEInt16();
+        }
+
+        internal void Write(System.IO.BinaryWriter writer)
+        {
+            writer.Write(Encoding.ASCII.GetBytes((Version ?? "").PadRight(4, '\0')[0..4]));
+            writer.WriteBEUInt16((ushort)(EnableVoice1 ? 1 : 0));
+            writer.WriteBEUInt16((ushort)(EnableVoice2 ? 1 : 0));
+            writer.WriteBEInt16(PlayPosition);
+            writer.WriteBEInt16(SelectedPosition);
+            writer.WriteBEInt16(SelectedSong);
+            writer.WriteBEInt16(Unknown);
+            writer.WriteBEInt16(PatternEditorVoice);
+            writer.WriteBEInt16(PatternEditorRow);
         }
     }
 }

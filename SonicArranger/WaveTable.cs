@@ -8,5 +8,10 @@
         {
             Data = reader.ReadBytes(128);
         }
+
+        internal void Write(System.IO.BinaryWriter writer)
+        {
+            writer.Write(Data);
+        }
     }
 }

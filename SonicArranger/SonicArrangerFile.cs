@@ -90,6 +90,12 @@ namespace SonicArranger
 		public WaveTable[] AdsrWaves { get; private set; }
 		public Sample[] Samples { get; private set; }
 
+		private readonly SongTable songTable = null;
+		private readonly OverTable overTable = null;
+		private readonly NoteTable noteTable = null;
+		private readonly InstrumentTable instrumentTable = null;
+		private readonly SampleTable sampleTable = null;
+
 		public SonicArrangerFile(ICustomReader reader)
         {
 			void ThrowInvalidData() => throw new InvalidDataException("No valid SonicArranger data stream");
@@ -143,6 +149,7 @@ namespace SonicArranger
 				{
 					Songs[i] = new Song(reader);
 				}
+				songTable = new SongTable(Songs);
 
 				// Read voices
 				reader.Position = start + overTableOffset;
@@ -152,6 +159,7 @@ namespace SonicArranger
 				{
 					Voices[i] = new Voice(reader);
 				}
+				overTable = new OverTable(Voices);
 
 				// Read notes
 				reader.Position = start + noteTableOffset;
@@ -161,6 +169,7 @@ namespace SonicArranger
 				{
 					Notes[i] = new Note(reader);
 				}
+				noteTable = new NoteTable(Notes);
 
 				// Read instruments
 				reader.Position = start + instrumentsOffset;
@@ -170,8 +179,9 @@ namespace SonicArranger
 				{
 					Instruments[i] = new Instrument(reader);
 				}
+				instrumentTable = new InstrumentTable(Instruments);
 
-				// Read wave forms
+				// Read synth wave forms
 				reader.Position = start + sywtptr;
 				int numWaveForms = (syarOffset - sywtptr) / 128;
 				Waves = new WaveTable[numWaveForms];
@@ -180,7 +190,7 @@ namespace SonicArranger
 					Waves[i] = new WaveTable(reader);
                 }
 
-				// Read wave forms
+				// Read ADSR wave forms
 				reader.Position = start + syarOffset;
 				int numSynthArrangements = (syafOffset - syarOffset) / 128;
 				AdsrWaves = new WaveTable[numSynthArrangements];
@@ -189,7 +199,7 @@ namespace SonicArranger
 					AdsrWaves[i] = new WaveTable(reader);
 				}
 
-				// Read wave forms
+				// Read AMF wave forms
 				reader.Position = start + syafOffset;
 				int numSynthAmfWaves = (samplesOffset - syafOffset) / 128;
 				AmfWaves = new WaveTable[numSynthAmfWaves];
@@ -200,7 +210,7 @@ namespace SonicArranger
 
 				// Read samples
 				reader.Position = start + samplesOffset;
-				Samples = new SampleTable(reader).Samples;
+				Samples = (sampleTable = new SampleTable(reader)).Samples;
 
 				if (new string(reader.ReadChars(8)) != "deadbeef" ||
 					reader.ReadBEUInt32() != 0)
@@ -249,19 +259,19 @@ namespace SonicArranger
 					switch (tag)
 					{
 						case "STBL":
-							Songs = new SongTable(reader).Songs;
+							Songs = (songTable = new SongTable(reader)).Songs;
 							break;
 						case "OVTB":
-							Voices = new OverTable(reader).Voices;
+							Voices = (overTable = new OverTable(reader)).Voices;
 							break;
 						case "NTBL":
-							Notes = new NoteTable(reader).Notes;
+							Notes = (noteTable = new NoteTable(reader)).Notes;
 							break;
 						case "INST":
-							Instruments = new InstrumentTable(reader).Instruments;
+							Instruments = (instrumentTable = new InstrumentTable(reader)).Instruments;
 							break;
 						case "SD8B":
-							Samples = new SampleTable(reader).Samples;
+							Samples = (sampleTable = new SampleTable(reader)).Samples;
 							break;
 						case "SYWT":
 						{
@@ -353,6 +363,81 @@ namespace SonicArranger
 			using (var stream = new FileStream(file, FileMode.Open))
 			{
 				return new SonicArrangerFile(stream);
+			}
+		}
+
+		public void Save(BinaryWriter writer, bool editable)
+		{
+			if (editable)
+            {
+				void WriteHeader(string header)
+                {
+					writer.Write(Encoding.ASCII.GetBytes(header));
+                }
+
+				WriteHeader((Version ?? "").PadRight(4, '\0')[0..4]);
+
+				// Songs
+				WriteHeader("STBL");
+				songTable.Write(writer);
+
+				// Voices
+				WriteHeader("OVTB");
+				overTable.Write(writer);
+
+				// Notes
+				WriteHeader("NTBL");
+				noteTable.Write(writer);
+
+				// Instruments
+				WriteHeader("INST");
+				instrumentTable.Write(writer);
+
+				// Samples
+				WriteHeader("SD8B");
+				sampleTable.Write(writer);
+
+				// Synth waves
+				WriteHeader("SYWT");
+				writer.WriteBEInt32(Waves.Length);
+				foreach (var waveTable in Waves)
+					waveTable.Write(writer);
+
+				// ADSR waves
+				WriteHeader("SYAR");
+				writer.WriteBEInt32(AdsrWaves.Length);
+				foreach (var waveTable in AdsrWaves)
+					waveTable.Write(writer);
+
+				// AMF waves
+				WriteHeader("SYAF");
+				writer.WriteBEInt32(AmfWaves.Length);
+				foreach (var waveTable in AmfWaves)
+					waveTable.Write(writer);
+
+				// Edit data
+				(EditData ?? new EditData()).Write(writer);
+			}
+			else
+            {
+				// TODO
+				throw new NotImplementedException();
+            }
+		}
+
+		public void Save(System.IO.Stream stream, bool editable, bool leaveOpen = false)
+        {
+			using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen))
+            {
+				Save(writer, editable);
+            }
+        }
+
+		public void Save(string file, bool editable)
+		{
+			using (var stream = new FileStream(file, FileMode.Create))
+			{
+				Save(file, editable);
 			}
 		}
 	}

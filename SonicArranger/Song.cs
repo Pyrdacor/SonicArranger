@@ -34,5 +34,15 @@
 			RepeatPos = reader.ReadBEInt16();
 			NBIrqps = reader.ReadBEInt16();
 		}
+
+		internal void Write(System.IO.BinaryWriter writer)
+		{
+			writer.WriteBEInt16(SongSpeed);
+			writer.WriteBEInt16(PatternLength);
+			writer.WriteBEInt16(StartPos);
+			writer.WriteBEInt16(StopPos);
+			writer.WriteBEInt16(RepeatPos);
+			writer.WriteBEInt16(NBIrqps);
+		}
 	}
 }

@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Linq;
+using System.Text;
 
 namespace SonicArranger
 {
@@ -51,7 +52,7 @@ namespace SonicArranger
 			Samples = samples;
 		}
 
-		internal void Write(System.IO.BinaryWriter writer)
+		internal void Write(System.IO.BinaryWriter writer, Instrument[] instruments = null)
 		{
 			writer.WriteBEInt32(Count);
 
@@ -87,10 +88,17 @@ namespace SonicArranger
 			}
 			else
 			{
-				var nameBytes = Encoding.ASCII.GetBytes("--blank--".PadRight(30, '\0'));
+				var defaultNameBytes = Encoding.ASCII.GetBytes("--blank--".PadRight(30, '\0'));
 
 				for (int s = 0; s < Samples.Length; ++s)
-					writer.Write(nameBytes);
+				{
+					var instrumentWithSample = instruments?.FirstOrDefault(i => !i.SynthMode && i.SampleWaveNo == s);
+
+					if (instrumentWithSample != null)
+						writer.Write(Encoding.ASCII.GetBytes(instrumentWithSample.Value.Name.PadRight(30, '\0')[0..30]));
+					else
+						writer.Write(defaultNameBytes);
+				}
 			}
 
 			foreach (var sample in Samples)

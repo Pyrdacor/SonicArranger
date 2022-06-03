@@ -412,7 +412,7 @@ namespace SonicArranger
 
 				// Samples
 				WriteHeader("SD8B");
-				sampleTable.Write(writer);
+				sampleTable.Write(writer, instrumentTable?.Instruments);
 
 				// Synth waves
 				WriteHeader("SYWT");

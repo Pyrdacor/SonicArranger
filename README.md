@@ -17,9 +17,9 @@ Converts SA files to WAV files or to module files which can be loaded and edited
 
 Version | Normal | Standalone
 --- | --- | --- 
-**1.9** (Windows 64bit) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.9/SonicConvert-Windows.zip) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.9/SonicConvert-Windows-Standalone.zip)
-**1.9** (Linux 64bit) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.9/SonicConvert-Linux.tar.gz) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.9/SonicConvert-Linux-Standalone.tar.gz)
-**1.9** (Windows 32bit) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.9/SonicConvert-Windows32Bit.zip) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.9/SonicConvert-Windows32Bit-Standalone.zip)
+**1.10** (Windows 64bit) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.10/SonicConvert-Windows.zip) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.10/SonicConvert-Windows-Standalone.zip)
+**1.10** (Linux 64bit) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.10/SonicConvert-Linux.tar.gz) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.10/SonicConvert-Linux-Standalone.tar.gz)
+**1.10** (Windows 32bit) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.10/SonicConvert-Windows32Bit.zip) | [Download](https://github.com/Pyrdacor/SonicArranger/releases/download/v1.10/SonicConvert-Windows32Bit-Standalone.zip)
 
 The standalone versions should work without .NET installed but are larger in size.
 
@@ -27,6 +27,7 @@ The standalone versions should work without .NET installed but are larger in siz
 
 #### Changlog
 
+- 1.10: When converting back to module files (SOAR), the sample names are taken from the instruments which use that sample
 - 1.9: Added possibility to save back to module format, fixed module format loading, add convert to module option in SonicConvert
 - 1.8: Fixed stream reset
 - 1.7: Fixed issue with wrong periods which lead to wrong note output

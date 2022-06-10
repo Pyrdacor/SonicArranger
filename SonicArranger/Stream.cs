@@ -30,6 +30,7 @@ namespace SonicArranger
         public int LoopCounter { get; private set; } = 0;
         readonly bool allowLowPassFilter = true;
         readonly bool pal = true;
+        readonly object loadMutex = new object();
         readonly object readMutex = new object();
         readonly object copyMutex = new object();
         bool initialized = false;
@@ -89,17 +90,20 @@ namespace SonicArranger
             if (song.SongSpeed < 1 || song.SongSpeed > 16)
                 throw new ArgumentOutOfRangeException("Song speed was outside the valid range of 1 to 16.");
 
-            paulaState.Reset(allowLowPassFilter, pal);
-            playTime = 0.0;
-            nextInterruptTime = 0.0;
-            songSpeed = song.SongSpeed;
-            patternIndex = song.StartPos;
-            noteIndex = 0;
-            divisionTick = 0;
-            endOfStreamIndex = null;
-            processedAmount = 0;
-            bufferSampleIndex = 0;
-            LoopCounter = 0;
+            lock (loadMutex)
+            {
+                paulaState.Reset(allowLowPassFilter, pal);
+                playTime = 0.0;
+                nextInterruptTime = 0.0;
+                songSpeed = song.SongSpeed;
+                patternIndex = song.StartPos;
+                noteIndex = 0;
+                divisionTick = 0;
+                endOfStreamIndex = null;
+                processedAmount = 0;
+                bufferSampleIndex = 0;
+                LoopCounter = 0;
+            }
 
             // Load initial data
             Load(0, (int)sampleRate * 2, false);
@@ -298,110 +302,113 @@ namespace SonicArranger
 
         void Load(int bufferIndex, int numSamples, bool loop)
         {
-            double tick = 1.0 / sampleRate;
-            double deltaTime = (double)numSamples / sampleRate - 0.1 * tick; // - 0.1 tick avoids rounding errors in loop condition
-
-            for (double d = 0.0; d < deltaTime; d += tick)
+            lock (loadMutex)
             {
-                if (endOfStreamIndex != null && endOfStreamIndex == processedAmount + bufferIndex)
-                    return;
+                double tick = 1.0 / sampleRate;
+                double deltaTime = (double)numSamples / sampleRate - 0.1 * tick; // - 0.1 tick avoids rounding errors in loop condition
 
-                bool processTick = nextInterruptTime <= playTime;
-
-                if (processTick)
+                for (double d = 0.0; d < deltaTime; d += tick)
                 {
-                    if (divisionTick++ % songSpeed == 0)
-                        ProcessNotes();
-                }
+                    if (endOfStreamIndex != null && endOfStreamIndex == processedAmount + bufferIndex)
+                        return;
 
-                for (int i = 0; i < PaulaState.NumTracks; ++i)
-                {
-                    paulaState.UpdateCurrentSample(i, playTime);
-                }
+                    bool processTick = nextInterruptTime <= playTime;
 
-                if (processTick)
-                {
+                    if (processTick)
+                    {
+                        if (divisionTick++ % songSpeed == 0)
+                            ProcessNotes();
+                    }
+
                     for (int i = 0; i < PaulaState.NumTracks; ++i)
-                        tracks[i].Tick(songSpeed);
-
-                    nextInterruptTime += interruptDelay;
-                }
-
-                if (channelMode == ChannelMode.Quad)
-                {
-                    for (int i = 0; i < 4; i++)
                     {
-                        var channelData = paulaState.ProcessTrackOutput(i, playTime) * 128.0;
-                        buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(channelData))));
+                        paulaState.UpdateCurrentSample(i, playTime);
                     }
-                }
-                else if (channelMode == ChannelMode.Stereo)
-                {
-                    var left = paulaState.ProcessLeftOutput(playTime) * 128.0;
-                    var right = paulaState.ProcessRightOutput(playTime) * 128.0;
-                    buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(left))));
-                    buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(right))));
-                }
-                else if (channelMode == ChannelMode.Mono)
-                {
-                    var data = paulaState.Process(playTime) * 128.0;
-                    buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(data))));
-                }
 
-                playTime += tick;
-            }
-
-            void ProcessNotes()
-            {
-                int? noteChangeIndex = null;
-                int? patternChangeIndex = null;
-
-                for (int i = 0; i < PaulaState.NumTracks; ++i)
-                {
-                    var voice = sonicArrangerFile.Voices[patternIndex * 4 + i];
-                    var note = sonicArrangerFile.Notes[voice.NoteAddress + noteIndex];
-                    tracks[i].Play(note, voice.NoteTranspose, voice.SoundTranspose, playTime);
-                    tracks[i].ProcessNoteCommand(note.Command, note.CommandInfo, ref songSpeed,
-                        patternIndex, out var trackNoteChangeIndex, out var trackPatternChangeIndex);
-
-                    if (trackNoteChangeIndex != null)
-                        noteChangeIndex = trackNoteChangeIndex;
-                    if (trackPatternChangeIndex != null)
-                        patternChangeIndex = trackPatternChangeIndex;
-                }
-
-                if (noteChangeIndex != null)
-                {
-                    noteIndex = noteChangeIndex.Value;
-
-                    if (patternChangeIndex != null)
-                        patternIndex = patternChangeIndex.Value;
-                }
-                else
-                {
-                    ++noteIndex;
-                }
-                if (noteIndex >= song.PatternLength)
-                {
-                    noteIndex = 0;
-
-                    if (patternChangeIndex != null)
-                        patternIndex = patternChangeIndex.Value;
-                    else
-                        ++patternIndex;
-                }
-                if (patternIndex > song.StopPos)
-                {
-                    if (loop)
+                    if (processTick)
                     {
-                        ++LoopCounter;
-                        patternIndex = Math.Min(song.RepeatPos, song.StopPos);
+                        for (int i = 0; i < PaulaState.NumTracks; ++i)
+                            tracks[i].Tick(songSpeed);
+
+                        nextInterruptTime += interruptDelay;
+                    }
+
+                    if (channelMode == ChannelMode.Quad)
+                    {
+                        for (int i = 0; i < 4; i++)
+                        {
+                            var channelData = paulaState.ProcessTrackOutput(i, playTime) * 128.0;
+                            buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(channelData))));
+                        }
+                    }
+                    else if (channelMode == ChannelMode.Stereo)
+                    {
+                        var left = paulaState.ProcessLeftOutput(playTime) * 128.0;
+                        var right = paulaState.ProcessRightOutput(playTime) * 128.0;
+                        buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(left))));
+                        buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(right))));
+                    }
+                    else if (channelMode == ChannelMode.Mono)
+                    {
+                        var data = paulaState.Process(playTime) * 128.0;
+                        buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(data))));
+                    }
+
+                    playTime += tick;
+                }
+
+                void ProcessNotes()
+                {
+                    int? noteChangeIndex = null;
+                    int? patternChangeIndex = null;
+
+                    for (int i = 0; i < PaulaState.NumTracks; ++i)
+                    {
+                        var voice = sonicArrangerFile.Voices[patternIndex * 4 + i];
+                        var note = sonicArrangerFile.Notes[voice.NoteAddress + noteIndex];
+                        tracks[i].Play(note, voice.NoteTranspose, voice.SoundTranspose, playTime);
+                        tracks[i].ProcessNoteCommand(note.Command, note.CommandInfo, ref songSpeed,
+                            patternIndex, out var trackNoteChangeIndex, out var trackPatternChangeIndex);
+
+                        if (trackNoteChangeIndex != null)
+                            noteChangeIndex = trackNoteChangeIndex;
+                        if (trackPatternChangeIndex != null)
+                            patternChangeIndex = trackPatternChangeIndex;
+                    }
+
+                    if (noteChangeIndex != null)
+                    {
+                        noteIndex = noteChangeIndex.Value;
+
+                        if (patternChangeIndex != null)
+                            patternIndex = patternChangeIndex.Value;
                     }
                     else
                     {
-                        // one full note till the end which lasts for noteDuration
-                        int remainingSamples = (int)(song.GetNoteDuration(songSpeed) * sampleRate);
-                        endOfStreamIndex = processedAmount + bufferIndex + remainingSamples * ((int)channelMode) - 1;
+                        ++noteIndex;
+                    }
+                    if (noteIndex >= song.PatternLength)
+                    {
+                        noteIndex = 0;
+
+                        if (patternChangeIndex != null)
+                            patternIndex = patternChangeIndex.Value;
+                        else
+                            ++patternIndex;
+                    }
+                    if (patternIndex > song.StopPos)
+                    {
+                        if (loop)
+                        {
+                            ++LoopCounter;
+                            patternIndex = Math.Min(song.RepeatPos, song.StopPos);
+                        }
+                        else
+                        {
+                            // one full note till the end which lasts for noteDuration
+                            int remainingSamples = (int)(song.GetNoteDuration(songSpeed) * sampleRate);
+                            endOfStreamIndex = processedAmount + bufferIndex + remainingSamples * ((int)channelMode) - 1;
+                        }
                     }
                 }
             }

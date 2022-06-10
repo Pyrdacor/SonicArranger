@@ -447,9 +447,7 @@ namespace SonicArranger
 
         public double ProcessTrackOutput(int trackIndex, double currentPlaybackTime)
         {
-            double output = 0.0;
-            
-            output = ProcessTrack(trackIndex, currentPlaybackTime);
+            double output = ProcessTrack(trackIndex, currentPlaybackTime);
 
             if (allowLowPassFilter && UseLowPassFilter)
                 output = lowPassFilters[trackIndex].Filter(output);

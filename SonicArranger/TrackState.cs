@@ -586,7 +586,7 @@ namespace SonicArranger
                     }
                     case Instrument.Effect.FreeNegator:
                     {
-                        if (playState.InstrumentFinished || playState.EffectFinished)
+                        if (playState.InstrumentFinished || playState.EffectFinished || currentSample.CopyTarget == null)
                             return;
                         int effectWave = instr.Effect1;
                         int waveLen = instr.Effect2;

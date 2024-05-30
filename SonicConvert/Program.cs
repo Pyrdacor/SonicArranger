@@ -1,6 +1,11 @@
-﻿using SonicArranger;
+﻿using NAudio.Lame;
+using NAudio.Wave;
+using SonicArranger;
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection.PortableExecutable;
 using System.Text.RegularExpressions;
 
 namespace SonicConvert
@@ -10,9 +15,11 @@ namespace SonicConvert
         static void Usage()
         {
             Console.WriteLine();
-            Console.WriteLine($"Usage: {nameof(SonicConvert)} <sapath> <wavpath> [options]");
-            Console.WriteLine("        Converts a sonic arranger file to wav.");
-            Console.WriteLine($"Usage: {nameof(SonicConvert)} dec <sapath> <soarpath>");
+            Console.WriteLine($"Usage: {nameof(SonicConvert)} <sapath> <outpath> [options]");
+            Console.WriteLine("        Converts a sonic arranger file to wav or mp3.");
+			Console.WriteLine($"Usage: {nameof(SonicConvert)} mp3s <sadir> <outdir> [options]");
+			Console.WriteLine("        Converts many sonic arranger files to mp3s.");
+			Console.WriteLine($"Usage: {nameof(SonicConvert)} dec <sapath> <soarpath>");
             Console.WriteLine("        Converts a sonic arranger file to the editable version (soar).");
             Console.WriteLine();
             Console.WriteLine("Options:");
@@ -54,16 +61,55 @@ namespace SonicConvert
                     return;
                 }
             }
-            else
+            else if (args.Length == 3 && args[0].ToLower() == "mp3s")
+			{
+                args = args.Skip(1).ToArray();
+                var dirs = args.Where(arg => !arg.StartsWith("-")).ToArray();
+
+                if (dirs.Length != 2)
+                {
+					Console.WriteLine("Wrong arguments.");
+					Environment.Exit(1);
+					return;
+				}
+
+                var options = args.Where(arg => arg.StartsWith("-"));
+				var sourceDir = dirs[0];
+                var destDir = dirs[1];
+
+                Directory.CreateDirectory(destDir);
+
+                var processedFiles = new List<string>();
+                var sourceFiles = Directory.GetFiles(sourceDir);
+
+                foreach (var sourceFile in sourceFiles)
+                {
+                    var extension = Path.GetExtension(sourceFile).ToLower();
+
+                    if (extension == ".wav" || extension == ".mp3" || extension == ".txt" || extension == ".md")
+                        continue;
+
+                    var filename = extension == ".sa" ? Path.GetFileNameWithoutExtension(sourceFile) : Path.GetFileName(sourceFile);
+
+                    if (processedFiles.Contains(filename))
+                        continue;
+
+                    processedFiles.Add(filename);
+
+                    var fileArgs = Enumerable.Concat(new List<string> { sourceFile, Path.Combine(destDir, filename + ".mp3") }, options).ToArray();
+                    SaToWavOrMp3(fileArgs, false);
+                }
+			}
+			else
             {
-                SaToWav(args);
+				SaToWavOrMp3(args);
             }
         }
 
-        static void SaToWav(string[] args)
+        static void SaToWavOrMp3(string[] args, bool exitOnCompletion = true)
         {
             string saPath = null;
-            string wavPath = null;
+            string wavOrMp3Path = null;
             int sampleRate = 44100;
             bool pal = true;
             SonicArranger.Stream.ChannelMode channelMode = SonicArranger.Stream.ChannelMode.Mono;
@@ -179,8 +225,8 @@ namespace SonicConvert
                 {
                     if (saPath == null)
                         saPath = arg;
-                    else if (wavPath == null)
-                        wavPath = arg;
+                    else if (wavOrMp3Path == null)
+                        wavOrMp3Path = arg;
                     else
                     {
                         Console.WriteLine("Invalid number of arguments.");
@@ -191,7 +237,7 @@ namespace SonicConvert
                 }
             }
 
-            if (saPath == null || wavPath == null)
+            if (saPath == null || wavOrMp3Path == null)
             {
                 Console.WriteLine("Invalid number of arguments.");
                 Usage();
@@ -207,15 +253,17 @@ namespace SonicConvert
             }
             catch
             {
-                Console.WriteLine("Failed to load sonic arranger file.");
-                Environment.Exit(1);
+                Console.WriteLine($"Failed to load sonic arranger file \"{saPath}\".");
+                if (exitOnCompletion)
+                    Environment.Exit(1);
                 return;
             }
 
             if (song < 0 || song >= saFile.Songs.Length)
             {
-                Console.WriteLine($"Song index {song} is not valid or present in the SA file.");
-                Environment.Exit(1);
+                Console.WriteLine($"Song index {song} is not valid or present in the SA file \"{saPath}\".");
+				if (exitOnCompletion)
+					Environment.Exit(1);
                 return;
             }
 
@@ -227,8 +275,9 @@ namespace SonicConvert
             }
             catch
             {
-                Console.WriteLine("Error while processing SA file with given options.");
-                Environment.Exit(2);
+                Console.WriteLine($"Error while processing SA file \"{saPath}\" with given options.");
+				if (exitOnCompletion)
+					Environment.Exit(2);
                 return;
             }
 
@@ -236,23 +285,34 @@ namespace SonicConvert
 
             try
             {
-                outFile = File.Create(wavPath);
+                outFile = File.Create(wavOrMp3Path);
             }
             catch
             {
-                Console.WriteLine("Error creating output file.");
-                Environment.Exit(3);
+                Console.WriteLine($"Error creating output file \"{wavOrMp3Path}\".");
+				if (exitOnCompletion)
+					Environment.Exit(3);
                 return;
             }
 
+            bool mp3 = wavOrMp3Path.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase);
+            var waveStream = mp3 ? new MemoryStream() : outFile;
+
             try
             {
-                WriteWave(outFile, saStream.ToSignedArray(numLoops), (uint)sampleRate, channelMode);
+                WriteWave(waveStream, saStream.ToSignedArray(numLoops), (uint)sampleRate, channelMode);
+
+                if (mp3)
+                {
+                    waveStream.Position = 0;
+                    WaveToMp3(waveStream, outFile, sampleRate, channelMode);
+                }
             }
             catch
             {
-                Console.WriteLine("Error writing data as WAV to output file.");
-                Environment.Exit(4);
+                Console.WriteLine($"Error writing data to output file \"{wavOrMp3Path}\".");
+				if (exitOnCompletion)
+					Environment.Exit(4);
                 return;
             }
             finally
@@ -261,9 +321,24 @@ namespace SonicConvert
             }
 
             Console.WriteLine("Successfully converted SA file to:");
-            Console.WriteLine(" -> " + wavPath);
-            Environment.Exit(0);
+            Console.WriteLine(" -> " + wavOrMp3Path);
+			if (exitOnCompletion)
+				Environment.Exit(0);
         }
+
+        static void WaveToMp3(System.IO.Stream waveStream, System.IO.Stream mp3Stream, int sampleRate, SonicArranger.Stream.ChannelMode channelMode)
+        {
+            // First convert to 16 bit PCM
+			WaveFormat target = new(sampleRate, 16, (int)channelMode);
+            using WaveStream sourceStream = new WaveFileReader(waveStream);
+            using WaveFormatConversionStream conversionStream = new(target, sourceStream);
+			using MemoryStream convertedStream = new();
+            WaveFileWriter.WriteWavFileToStream(convertedStream, conversionStream);
+            convertedStream.Position = 0;
+			using var waveReader = new WaveFileReader(convertedStream);
+			using var mp3Writer = new LameMP3FileWriter(mp3Stream, waveReader.WaveFormat, 192);
+			waveReader.CopyTo(mp3Writer);
+		}
 
         static void WriteWave(System.IO.Stream stream, byte[] data, uint sampleRate, SonicArranger.Stream.ChannelMode channelMode)
         {

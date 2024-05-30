@@ -13,6 +13,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="NAudio.Lame" Version="2.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SonicArranger\SonicArranger.csproj" />
   </ItemGroup>
 

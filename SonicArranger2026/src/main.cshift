@@ -5,6 +5,9 @@
 //
 //   sonicarranger2026 [file]               the tracker, with a file
 //   sonicarranger2026 --convert in out     saves a file in the module format, without a window
+//   sonicarranger2026 --wav in out.wav [options]  plays a song into a WAV file, without a window: -t<n> the song
+//                                          (0-based), -r<n> the sample rate (44100), -s stereo (LRRL), -q 4 channels,
+//                                          -d no low pass filter, -n NTSC, -l<n> loops (as SonicConvert)
 //   sonicarranger2026 --frames N [file]    draws N frames and closes (for screenshots and tests)
 
 using System;
@@ -29,7 +32,7 @@ struct App
     bool EditMode;        // keys change the pattern (Space switches)
     int Octave;           // of the lower row of the piano keys (F1 to F8: 0 to 7)
     int Step;             // rows the cursor moves after a note is entered
-    int FileMode;         // the file dialog: 0 none, 1 open, 2 save as
+    int FileMode;         // the file dialog: 0 none, 1 open, 2 save as, 3 export WAV
     string FilePath;
     int Discard;          // asks before the changes are lost: 0 no, 1 for New, 2 for Open, 3 for Quit
     bool Dark;
@@ -74,6 +77,32 @@ void SaveAs(ref App app, string path)
     app.Modified = false;
     app.History.Break();
     app.Message = $"Saved {Path.GetFileName(path)}";
+}
+
+// File > Export WAV: the save dialog, with the name of the module and .wav
+void StartExport(ref App app)
+{
+    string name = app.Path.Length > 0 ? Path.GetFileName(app.Path).ToString() : "song";
+    app.FilePath = name + ".wav";
+    app.FileMode = 3;
+}
+
+// plays the song shown into a WAV file: mono, 44.1 kHz, with the low pass filter, as SonicConvert does by default
+void ExportSong(ref App app, string path)
+{
+    if (Player.Create(app.Song, app.SongIndex, 44100, ChannelMode.Mono, true, true) is not Player player)
+    {
+        app.Message = "The song cannot be played (speed 1 to 16, 1 to 200 ticks per second)";
+        return;
+    }
+    var samples = player.ReadAll(0);
+    if (File.WriteAllBytes(path, WavFile(samples, 44100, 1)) is error e)
+    {
+        app.Message = $"Cannot write {Path.GetFileName(path)}";
+        return;
+    }
+    int seconds = samples.Length / 44100;
+    app.Message = $"Exported {Path.GetFileName(path)} ({seconds / 60}:{Dec(seconds % 60, 2)})";
 }
 
 // New, Open and Quit: at once, or after asking when there are changes
@@ -139,6 +168,8 @@ void Draw(Ui ui, ref App app)
                 Ask(ref app, 2);
             if (ui.MenuItem("Save as...", "Ctrl+S"))
                 app.FileMode = 2;
+            if (ui.MenuItem("Export WAV...", "Ctrl+E"))
+                StartExport(ref app);
             if (ui.MenuItem("Quit", "Ctrl+Q"))
                 Ask(ref app, 3);
         }
@@ -174,6 +205,8 @@ void Draw(Ui ui, ref App app)
             Ask(ref app, 2);
         if (input.Pressed(Key.S, KeyModifiers.Ctrl))
             app.FileMode = 2;
+        if (input.Pressed(Key.E, KeyModifiers.Ctrl))
+            StartExport(ref app);
         if (input.Pressed(Key.Q, KeyModifiers.Ctrl))
             Ask(ref app, 3);
     }
@@ -204,14 +237,16 @@ void Draw(Ui ui, ref App app)
     if (app.FileMode != 0)
     {
         bool open = app.FileMode == 1;
-        var result = ui.FileDialog("file", open ? "Open a module" : "Save the module", ref app.FilePath,
-                                   open ? FileDialogMode.Open : FileDialogMode.Save);
+        string title = open ? "Open a module" : (app.FileMode == 2 ? "Save the module" : "Export the song as WAV");
+        var result = ui.FileDialog("file", title, ref app.FilePath, open ? FileDialogMode.Open : FileDialogMode.Save);
         if (result == UiDialogResult.Ok)
         {
             if (open)
                 Open(ref app, app.FilePath);
-            else
+            else if (app.FileMode == 2)
                 SaveAs(ref app, app.FilePath);
+            else
+                ExportSong(ref app, app.FilePath);
         }
         if (result != UiDialogResult.None)
             app.FileMode = 0;
@@ -236,6 +271,57 @@ void Draw(Ui ui, ref App app)
     }
 }
 
+// --wav: the options of SonicConvert
+int ExportWav(string[] args)
+{
+    int song = 0;
+    int rate = 44100;
+    int loops = 0;
+    var mode = ChannelMode.Mono;
+    bool filter = true;
+    bool pal = true;
+    for (var i = 3; i < args.Length; i += 1)
+    {
+        var a = args[i];
+        if (a == "-s")
+            mode = ChannelMode.Stereo;
+        else if (a == "-q")
+            mode = ChannelMode.Quad;
+        else if (a == "-d")
+            filter = false;
+        else if (a == "-n")
+            pal = false;
+        else if (a.Length > 2 && a[0..2].ToString() == "-t" && a[2..].ToString().ParseInt() is int t)
+            song = t;
+        else if (a.Length > 2 && a[0..2].ToString() == "-r" && a[2..].ToString().ParseInt() is int r)
+            rate = r;
+        else if (a.Length > 2 && a[0..2].ToString() == "-l" && a[2..].ToString().ParseInt() is int l)
+            loops = Math.Min(100, l);
+        else
+        {
+            Console.WriteLine($"error: unknown option {a}");
+            return 1;
+        }
+    }
+    if (LoadModule(args[1]) is not Module m)
+    {
+        Console.WriteLine($"error: cannot load {args[1]}");
+        return 1;
+    }
+    if (Player.Create(m, song, rate, mode, filter, pal) is not Player player)
+    {
+        Console.WriteLine("error: the song cannot be played (song, sample rate, speed or ticks per second)");
+        return 1;
+    }
+    var samples = player.ReadAll(loops);
+    if (File.WriteAllBytes(args[2], WavFile(samples, rate, (int)mode)) is error e)
+    {
+        Console.WriteLine($"error: cannot write {args[2]}");
+        return 1;
+    }
+    return 0;
+}
+
 int Main(string[] args)
 {
     if (args.Length == 3 && args[0] == "--convert")
@@ -244,6 +330,8 @@ int Main(string[] args)
         try SaveModule(m, args[2]);
         return 0;
     }
+    if (args.Length >= 3 && args[0] == "--wav")
+        return ExportWav(args);
     int frames = 0;
     string file = "";
     for (var i = 0; i < args.Length; i += 1)

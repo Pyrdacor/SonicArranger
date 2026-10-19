@@ -1,6 +1,7 @@
 // The tracker in a real browser: the page of "cshiftc publish SonicArranger2026", driven with Playwright (Chromium).
 // It enters notes and a command in edit mode, undoes the last change, saves the module (a download) and checks the
-// notes in the saved file. Without Playwright it says so and ends with 0.
+// notes in the saved file, then exports the song as WAV (a download, saved next to the module as .wav: the CI compares
+// it with the WAV of the native program and of SonicConvert). Without Playwright it says so and ends with 0.
 //
 //   cshiftc publish SonicArranger2026 && node SonicArranger2026/tests/ui-check.mjs SonicArranger2026/bin/sonicarranger2026.html [saved.sa]
 
@@ -71,6 +72,19 @@ try {
     check(note(3)[2] === 0x0f, `the command F in row 3: ${note(3)}`);
     check(note(4).every((b) => b === 0), `row 4 is empty after undo: ${note(4)}`);
     check(note(64).every((b) => b === 0), "voice 2 has a pattern of its own");
+
+    // the song as WAV (Ctrl+E, the name given: saved.sa.wav)
+    const wavDownload = p.waitForEvent("download", { timeout: 20000 });
+    await key("Control+e");
+    await p.waitForTimeout(400);
+    await key("Enter");
+    const wav = await wavDownload;
+    const wavPath = saved + ".wav";
+    await wav.saveAs(wavPath);
+    const wavBytes = readFileSync(wavPath);
+    check(wav.suggestedFilename() === "saved.sa.wav", `the WAV is named ${wav.suggestedFilename()}`);
+    check(wavBytes.subarray(0, 4).toString() === "RIFF" && wavBytes.subarray(8, 16).toString() === "WAVEfmt ", "the export is a WAV file");
+    check(wavBytes.length > 44 + 44100, `the WAV has ${wavBytes.length - 44} samples`);
 } finally {
     await browser.close();
 }

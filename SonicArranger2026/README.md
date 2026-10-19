@@ -12,7 +12,8 @@ This is the start; it grows step by step.
 | Show | the songs and their timing, the over table (pattern address, sound and note transpose of each voice per position), the instruments, the patterns |
 | Edit | notes, instruments and note options in the pattern (the keyboard as a piano), the values of the song, the voices of a position, inserting and removing positions, new patterns; undo and redo |
 | Save | in the module format; Sonic Arranger and SonicConvert load it |
-| Next | the replayer (sound), the instrument editor, waves and samples, saving in the packed format |
+| Play | the replayer makes WAV files (File > Export WAV, Ctrl+E; `--wav`): the same samples as SonicConvert |
+| Next | playing in the tracker (needs sound output in CShift), the replayer checked against the Amiga routine, the instrument editor, waves and samples, saving in the packed format |
 
 ## Build and run
 
@@ -38,6 +39,7 @@ In the browser, File > Open uses the browser's file chooser and File > Save as g
 | Ctrl+I, Ctrl+Del | insert a position after this one (a copy), remove this position |
 | Ctrl+N, Ctrl+D | the voice gets a new empty pattern, or a copy of its pattern, at the end of the note table |
 | Ctrl+O, Ctrl+S, Ctrl+Q | open, save as, quit (asks first when there are changes) |
+| Ctrl+E | export the song as WAV (mono, 44.1 kHz; in the browser a download) |
 
 In edit mode, on the note column the keyboard is a piano as in ProTracker: `Z S X D C V G B H N J M` is the octave
 chosen with F1 to F8, `Q 2 W 3 E R 5 T 6 Y 7 U I` the one above (letters of a US keyboard; on a German one Y and Z
@@ -51,7 +53,22 @@ Ctrl+N or Ctrl+D give the voice a pattern of its own. A new module starts with o
 voice.
 
 `sonicarranger2026 --convert in out` saves a file in the module format without a window (a packed file becomes an
-editable module, like `SonicConvert dec`).
+editable module, like `SonicConvert dec`). `sonicarranger2026 --wav in out.wav [options]` plays a song into a WAV
+file, with the options of SonicConvert: `-t<n>` the song (0-based), `-r<n>` the sample rate, `-s` stereo (LRRL),
+`-q` 4 channels, `-d` no low pass filter, `-n` NTSC, `-l<n>` loops.
+
+## The replayer
+
+`lib/src/player.cshift` is a port of the replayer of the C# library in this repository (`Stream`, `TrackState`,
+`PaulaState`): the same values, the same order of floating point operations, the same rounding. So it makes the same
+samples as SonicConvert, byte for byte. That is what the tests check; known differences to the Amiga replayer
+(`SONIC_ARRANGER.S` of Ambermoon) can then be fixed one by one, each with a test of its own. As in SonicConvert, the
+effects Metawdrpk and Oscillator 1 and the command 9 (pattern length) do nothing yet. Where SonicConvert would stop
+with an exception (an index past a table, an instrument longer than its sample), the replayer goes on with zeros.
+The noise generators use a generator of their own: SonicConvert seeds its noise with the time, so those songs sound a
+bit different on each run.
+
+A song of two minutes takes about a second (in the browser about four).
 
 ## Layout
 
@@ -59,6 +76,7 @@ editable module, like `SonicConvert dec`).
 | --- | --- |
 | `lib` | the library `SonicArranger` (no GUI): the data of a module (`module.cshift`), reading both formats (`reader.cshift`), writing the module format (`writer.cshift`), names of notes, commands and effects |
 | `lib/src/edit.cshift` | changing notes, positions and patterns; undo and redo |
+| `lib/src/player.cshift` | the replayer and WAV files |
 | `src` | the tracker: the window (`main`), the panels (`views`), the pattern view (`pattern`), the keys (`keys`) |
 | `tests` | the tests of the library and `run.sh` |
 
@@ -76,14 +94,18 @@ patterns, and undo; and every file of the folder is opened, saved in the module 
 file must stay the same byte for byte). With `dotnet` it then builds [SonicConvert](../SonicConvert) and converts each
 packed file and the module saved by SonicArranger2026 from it to WAV: both must give the same WAV. Songs with a noise
 generator sound different on each run of SonicConvert (it seeds the noise with the time), so for them only the length
-must agree. A copy of each module with a note changed must convert as well and sound different.
+must agree. A copy of each module with a note changed must convert as well and sound different. And the replayer
+of SonicArranger2026 (`--wav`) must give the same WAV as SonicConvert for every packed file (with noise: the same
+length).
 
 `tests/ui-check.mjs` drives the browser page with Playwright: it enters notes and a command in edit mode, undoes a
-change, saves the module (a download) and checks the notes in the file.
+change, saves the module (a download) and checks the notes in the file, then exports the song as WAV. The workflow
+compares that WAV with the one of the native program and the one of SonicConvert.
 
 With the 34 songs of Ambermoon (`git clone https://github.com/Pyrdacor/Ambermoon` and the folder `Music`, 34 packed
 files and 34 modules) all checks pass, and SonicConvert gives the same WAV for 32 of the packed songs and the same
-length for the 2 with noise; all 34 edited ones convert and sound different. The workflow
+length for the 2 with noise; all 34 edited ones convert and sound different; the replayer gives the same WAV as
+SonicConvert for the 32 songs without noise (also with NTSC and 22.05 kHz, checked by hand). The workflow
 `.github/workflows/sonicarranger2026.yml` runs this and the browser check on every push.
 
 One difference to `SonicConvert dec` is on purpose: it writes an instrument's vibrato delay 0xFFFF ("no vibrato") as

@@ -7,7 +7,7 @@
 //   sonicarranger2026 --convert in out     saves a file in the module format, without a window
 //   sonicarranger2026 --wav in out.wav [options]  plays a song into a WAV file, without a window: -t<n> the song
 //                                          (0-based), -r<n> the sample rate (44100), -s stereo (LRRL), -q 4 channels,
-//                                          -d no low pass filter, -n NTSC, -l<n> loops (as SonicConvert)
+//                                          -d no low pass filter, -n NTSC, -i interpolate, -l<n> loops (as SonicConvert)
 //   sonicarranger2026 --frames N [file]    draws N frames and closes (for screenshots and tests)
 
 using System;
@@ -87,10 +87,10 @@ void StartExport(ref App app)
     app.FileMode = 3;
 }
 
-// plays the song shown into a WAV file: mono, 44.1 kHz, with the low pass filter, as SonicConvert does by default
+// plays the song shown into a WAV file: mono, 44.1 kHz, as SonicConvert does by default
 void ExportSong(ref App app, string path)
 {
-    if (Player.Create(app.Song, app.SongIndex, 44100, ChannelMode.Mono, true, true) is not Player player)
+    if (Player.Create(app.Song, app.SongIndex, 44100, ChannelMode.Mono, true, true, false) is not Player player)
     {
         app.Message = "The song cannot be played (speed 1 to 16, 1 to 200 ticks per second)";
         return;
@@ -280,6 +280,7 @@ int ExportWav(string[] args)
     var mode = ChannelMode.Mono;
     bool filter = true;
     bool pal = true;
+    bool interpolate = false;
     for (var i = 3; i < args.Length; i += 1)
     {
         var a = args[i];
@@ -291,6 +292,8 @@ int ExportWav(string[] args)
             filter = false;
         else if (a == "-n")
             pal = false;
+        else if (a == "-i")
+            interpolate = true;
         else if (a.Length > 2 && a[0..2].ToString() == "-t" && a[2..].ToString().ParseInt() is int t)
             song = t;
         else if (a.Length > 2 && a[0..2].ToString() == "-r" && a[2..].ToString().ParseInt() is int r)
@@ -308,7 +311,7 @@ int ExportWav(string[] args)
         Console.WriteLine($"error: cannot load {args[1]}");
         return 1;
     }
-    if (Player.Create(m, song, rate, mode, filter, pal) is not Player player)
+    if (Player.Create(m, song, rate, mode, filter, pal, interpolate) is not Player player)
     {
         Console.WriteLine("error: the song cannot be played (song, sample rate, speed or ticks per second)");
         return 1;

@@ -1,0 +1,48 @@
+# SonicArranger2026 in the browser: the page of "cshiftc publish" (one HTML file with everything) on GitHub Pages,
+# for every push to main that changes the tracker.
+name: SonicArranger2026 on GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "SonicArranger2026/**"
+      - ".github/workflows/sonicarranger2026-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      CSHIFT_VERSION: "0.37"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cshiftc
+        run: |
+          curl -sSfL -o cshift.tar.xz "https://github.com/Robert-Schneckenhaus/CShift/releases/download/v$CSHIFT_VERSION/cshift-$CSHIFT_VERSION-linux-x64.tar.xz"
+          mkdir -p "$RUNNER_TEMP/cshift"
+          tar -xJf cshift.tar.xz -C "$RUNNER_TEMP/cshift"
+          echo "CSHIFTC=$RUNNER_TEMP/cshift/cshift-$CSHIFT_VERSION-linux-x64/cshiftc" >> "$GITHUB_ENV"
+      - name: Build the page
+        run: |
+          "$CSHIFTC" publish SonicArranger2026
+          mkdir -p _site
+          cp SonicArranger2026/bin/sonicarranger2026.html _site/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,12 +1,12 @@
-//! The replayer: turns a song of a module into 8-bit PCM samples, as SonicConvert does (the C# library
-//! SonicArranger of this repository: Stream, TrackState and PaulaState). It is a port of that code, value for value
-//! and in the same order of floating point operations, so the samples are the same as those of SonicConvert. Where
-//! that code would throw (an index past a table, a sample shorter than the instrument), this one goes on with zeros.
-//! The noise generators take their numbers from a generator of their own: SonicConvert seeds its noise with the time.
+//! The replayer: turns a song of a module into 8-bit PCM samples, as SonicConvert 1.11 does (the C# library
+//! SonicArranger of this repository: Stream, TrackState and PaulaState), which follows the Amiga replay routine of
+//! Sonic Arranger (SONIC_ARRANGER.S, reconstructed from Ambermoon). It is a port of that code, value for value and in
+//! the same order of floating point operations, so the samples are the same as those of SonicConvert, byte for byte;
+//! even the noise, which comes from a port of System.Random with the same seed.
 //!
-//! The 4 voices of the Amiga (Paula) play the sample data of a note at the speed of its period, interpolated
-//! linearly. The interrupt (50 times a second by default) runs the effects of the instruments; every `speed` ticks
-//! the next row of the pattern is played.
+//! Paula, the sound chip of the Amiga, plays a block of bytes per voice with the speed of its period, holding each
+//! byte (or, optionally, interpolating). The interrupt (50 times a second by default) plays the next row every
+//! `speed` ticks and the effects of the instruments in every tick.
 
 namespace SonicArranger;
 
@@ -45,8 +45,6 @@ const ReadOnlySlice<int> VibratoTable = [
     0xa9, 0xab, 0xad, 0xb0, 0xb2, 0xb5, 0xb7, 0xba, 0xbc, 0xbf, 0xc2, 0xc4, 0xc7, 0xca, 0xcd, 0xd0,
     0xd3, 0xd6, 0xd9, 0xdb, 0xde, 0xe2, 0xe5, 0xe8, 0xeb, 0xee, 0xf1, 0xf4, 0xf7, 0xfa, 0xfd, 0x00];
 
-const double PalClock = 7093789.2;
-const double NtscClock = 7159090.5;
 
 /// A value as a signed byte (-128 to 127), wrapping around like a cast to sbyte in C#.
 int S8(int value)
@@ -54,11 +52,6 @@ int S8(int value)
     return ((value & 0xff) ^ 0x80) - 0x80;
 }
 
-/// A period of the table; an index outside of it gives the period of the nearest end.
-int PeriodOf(int note)
-{
-    return NotePeriods[Math.Max(0, Math.Min(note, NotePeriods.Length - 1))];
-}
 
 /// How the voices are written: one channel (all 4 voices), two (LRRL: voices 1 and 4 left, 2 and 3 right) or four.
 enum ChannelMode : int32
@@ -68,95 +61,169 @@ enum ChannelMode : int32
     Quad = 4
 }
 
-/// One voice: the registers of Paula (data, period, volume), the data being played, and the state of the replayer.
-struct PlayVoice
+
+const double PalClock = 3546895.0;
+const double NtscClock = 3579545.0;
+
+/// The period of a note, 0 outside of the table.
+int PeriodOf(int note)
 {
-    // ---- Paula: AUDxLC (the data and where it starts), AUDxPER, AUDxVOL ----
+    return note < 0 || note >= NotePeriods.Length ? 0 : NotePeriods[note];
+}
+
+/// A value as a signed 16-bit value, wrapping around like a cast to short in C#.
+int S16(int value)
+{
+    return ((value & 0xffff) ^ 0x8000) - 0x8000;
+}
+
+/// A byte of the waves of a list (128 bytes each) as an unsigned value: like the original, an index past the end of
+/// a wave reads the next one (the waves are one block of memory); 0 outside of all.
+int WaveByte(List<uint8[]> waves, int wave, int index)
+{
+    int64 at = (int64)wave * 128 + index;
+    if (at < 0 || at >= (int64)waves.Count() * 128)
+        return 0;
+    var data = waves[(int)(at / 128)];
+    int i = (int)(at % 128);
+    return i < data.Length ? data[i] : 0;
+}
+
+/// A byte of an array as a signed value, 0 outside of it.
+int SignedByte(uint8[] data, int index)
+{
+    if (index < 0 || index >= data.Length)
+        return 0;
+    return S8(data[index]);
+}
+
+/// System.Random of .NET with a seed (Knuth's subtractive generator), so the noise is that of SonicConvert.
+struct NetRandom
+{
+    int[] Seeds;
+    int[] Positions;     // the two positions in Seeds (in an array: the state is shared by all copies)
+
+    static NetRandom Create(int seed)
+    {
+        var r = NetRandom { Seeds = new int[56], Positions = new int[2] };
+        r.Positions[1] = 21;
+        int big = 2147483647;
+        int subtraction = seed == -2147483648 ? big : Math.Abs(seed);
+        int mj = 161803398 - subtraction;
+        r.Seeds[55] = mj;
+        int mk = 1;
+        int ii = 0;
+        for (var i = 1; i < 55; i += 1)
+        {
+            ii += 21;
+            if (ii >= 55)
+                ii -= 55;
+            r.Seeds[ii] = mk;
+            mk = mj - mk;
+            if (mk < 0)
+                mk += big;
+            mj = r.Seeds[ii];
+        }
+        for (var k = 1; k < 5; k += 1)
+        {
+            for (var i = 1; i < 56; i += 1)
+            {
+                int n = i + 30;
+                if (n >= 55)
+                    n -= 55;
+                r.Seeds[i] -= r.Seeds[1 + n];
+                if (r.Seeds[i] < 0)
+                    r.Seeds[i] += big;
+            }
+        }
+        return r;
+    }
+
+    int Sample()
+    {
+        int big = 2147483647;
+        int a = Positions[0] + 1;
+        if (a >= 56)
+            a = 1;
+        int b = Positions[1] + 1;
+        if (b >= 56)
+            b = 1;
+        int value = Seeds[a] - Seeds[b];
+        if (value == big)
+            value -= 1;
+        if (value < 0)
+            value += big;
+        Seeds[a] = value;
+        Positions[0] = a;
+        Positions[1] = b;
+        return value;
+    }
+
+    /// A number from 0 to max - 1, as Random.Next(max).
+    int Next(int max)
+    {
+        return (int)(Sample() * (1.0 / 2147483647) * max);
+    }
+}
+
+/// One of the 4 channels of Paula: the latched location (AUDxLC) and length in bytes (AUDxLEN * 2), the period
+/// (AUDxPER), the volume (AUDxVOL), the DMA, and the block being played.
+struct PaulaChannel
+{
     uint8[] Data;
-    bool DataChanged;
-    int DataIndex;
+    int Offset;
+    int Length;
     int Period;
     int Volume;
-    // ---- the data being played: a copy from DataIndex on, changed by the instrument effects ----
-    uint8[] Current;
-    double StartTime;
-    int Index;
-    double Gamma;
-    // ---- the replayer ----
+    bool Dma;
+    uint8[] CurrentData;
+    int CurrentOffset;
+    int CurrentLength;
+    double Position;
+}
+
+/// One voice of the replayer: the fields of the track structure of the Amiga routine.
+struct PlayVoice
+{
+    uint8[] SynthWave;       // 128 bytes: the wave of a synth instrument, changed by its effects and played from here
     bool HasInstrument;
-    int Instrument;            // 0-based
-    int EffectDelayCounter;
-    int AmfDelayCounter;
-    int AdsrDelayCounter;
-    int SustainCounter;
-    int AdsrIndex;
-    int AmfIndex;
-    bool InstrumentFinished;
-    bool EffectFinished;
-    bool NoteOff;
-    int NoteVolume;
-    int FadeOutVolume;
-    int VibratoDelayCounter;
-    int VibratoIndex;
-    int VibratoSpeed;
-    int VibratoLevel;
-    int Finetuning;
-    int PeriodReductionPerTick;
-    int VolumeChangePerTick;
-    int CurrentEffectRuns;
-    int CurrentEffectIndex;
-    int LastNoteIndex;
-    int CurrentNoteIndex;
-    int DivisionTick;
-    bool HasNote;
-    Note CurrentNote;
-    int CurrentArpeggioIndex;
-    int CurrentArpeggioCommandIteration;
-    int CurrentNotePortamentoPeriod;
-    int LastNotePortamentoPeriod;
+    int Instrument;          // 0-based
+    int CurrNote;
+    int PrevNote;
+    int FineTuning;
+    int PitchBend;
+    int Volume;
+    int VolumeSlide;
+    int VibratoPos;
+    int VibratoDelay;
+    int PortamentoValue;
+    int Portamento;
+    int AdsrPos;
+    int SustainPos;
+    int AdsrDelay;
+    int AmfPos;
+    int AmfDelay;
+    int SynthEffectPos;
+    int SynthPos;
+    int SynthDelay;
+    int ArpeggioPos;
+    int SimpleArpeggioPos;
+    int VolumeLevel;         // for VU meters: 4 times the volume
+    int Flags;               // bit 0: ended, 1: a morph reached its wave, 2: free negator ended, 3: oscillator direction
+    bool SyntheticMode;
+    bool SampleRepeat;
+    Note RowNote;
 
-    void SetData(uint8[] data)
+    int Byte(int index)
     {
-        Data = data;
-        DataChanged = true;
+        return SignedByte(SynthWave, index);
     }
 
-    void SetDataIndex(int index)
+    void SetByte(int index, int value)
     {
-        if (DataIndex != index)
-        {
-            DataIndex = index;
-            DataChanged = true;
-        }
+        if (index >= 0 && index < SynthWave.Length)
+            SynthWave[index] = (uint8)(value & 0xff);
     }
-
-    /// A byte of the data being played as a signed value, 0 past its end (an empty array is "no data").
-    int Sample(int index)
-    {
-        if (index < 0 || index >= Current.Length)
-            return 0;
-        return S8(Current[index]);
-    }
-
-    void SetSample(int index, int value)
-    {
-        if (index >= 0 && index < Current.Length)
-            Current[index] = (uint8)(value & 0xff);
-    }
-}
-
-/// The vibrato delay of an instrument: 255 and more (and -1) mean none (-1).
-int VibratoDelayOf(Instrument inst)
-{
-    return inst.VibDelay >= 255 ? -1 : inst.VibDelay;
-}
-
-/// A byte of a wave as an unsigned value, 0 past its end.
-int WaveByte(uint8[] wave, int index)
-{
-    if (index < 0 || index >= wave.Length)
-        return 0;
-    return wave[index];
 }
 
 /// Plays a song of a module.
@@ -167,39 +234,48 @@ struct Player
     int SampleRate;
     ChannelMode Mode;
     int Channels;
+    PaulaChannel[] Paula;
     PlayVoice[] Voices;
+    uint8[] Silence;
+    double Clock;
+    bool AllowLowPassFilter;
+    bool Interpolate;
+    bool UseLowPassFilter;
+    int MasterVolume;
+    // the song state
+    int Speed;
+    int PatternLength;
+    int OverLinePos;
+    int OverPatternPos;
+    int SongSpeedPos;
+    int SyncValue;
+    int CurrentPosition;
+    NetRandom Noise;
     // the output: 2 seconds, read in parts of 1 second (as the Stream of SonicConvert)
     uint8[] Buffer;
     int BufferSampleIndex;
     double PlayTime;
     double NextInterruptTime;
     double InterruptDelay;
-    int SongSpeed;
-    int PatternIndex;
-    int NoteIndex;
-    int DivisionTick;
     bool HasEnd;
     int EndIndex;
     int Processed;
     int LoopCounter;
-    bool AllowLowPassFilter;
-    bool UseLowPassFilter;
-    double Clock;
-    int MasterVolume;
-    // the low pass filters (second order Butterworth, one per output channel): last inputs and outputs
-    double[] LastIn0;
-    double[] LastIn1;
-    double[] LastOut0;
-    double[] LastOut1;
-    double Q;
-    double R;
-    double S;
-    double T;
-    double U;
-    uint32 Noise;
+    // the low pass filters (one per output channel)
+    double B0;
+    double B1;
+    double B2;
+    double A1;
+    double A2;
+    double[] X1;
+    double[] X2;
+    double[] Y1;
+    double[] Y2;
 
-    /// A player for a song (0-based) of a module. The sample rate is 2000 to 200000 Hz.
-    static Error<Player> Create(Module m, int song, int sampleRate, ChannelMode mode, bool lowPassFilter, bool pal)
+    /// A player for a song (0-based) of a module. The sample rate is 2000 to 200000 Hz. lowPassFilter allows the
+    /// LED filter (the song switches it), interpolate interpolates the bytes linearly instead of holding them.
+    static Error<Player> Create(Module m, int song, int sampleRate, ChannelMode mode, bool lowPassFilter, bool pal,
+                                bool interpolate)
     {
         if (song < 0 || song >= m.Songs.Count())
             return error($"there is no song {song + 1}");
@@ -214,23 +290,30 @@ struct Player
             return error("the module has no positions");
         int channels = (int)mode;
         var p = Player { M = m, Song = info, SampleRate = sampleRate, Mode = mode, Channels = channels,
-                         Voices = new PlayVoice[4], Buffer = new uint8[2 * sampleRate * channels],
-                         InterruptDelay = 1.0 / info.TicksPerSecond, AllowLowPassFilter = lowPassFilter,
-                         UseLowPassFilter = true, Clock = pal ? PalClock : NtscClock, MasterVolume = 64,
-                         LastIn0 = new double[4], LastIn1 = new double[4], LastOut0 = new double[4],
-                         LastOut1 = new double[4], Noise = 0x2545f491u };
-        // the coefficients of the filter, as in SonicConvert (for 44.1 kHz, whatever the sample rate)
-        double omega0 = 2.0 * Math.PI * 3275.0 / 44100.0;
-        double k = omega0 / Math.Tan(0.5 * omega0 * 44100.0);
+                         Paula = new PaulaChannel[4], Voices = new PlayVoice[4], Silence = new uint8[2],
+                         Clock = pal ? PalClock : NtscClock, AllowLowPassFilter = lowPassFilter,
+                         Interpolate = interpolate, MasterVolume = 63, Buffer = new uint8[2 * sampleRate * channels],
+                         InterruptDelay = 1.0 / info.TicksPerSecond, X1 = new double[4], X2 = new double[4],
+                         Y1 = new double[4], Y2 = new double[4] };
+        // the LED filter: a second order Butterworth filter at 3275 Hz (bilinear transform with prewarping)
+        double k = Math.Tan(Math.PI * 3275.0 / sampleRate);
         double k2 = k * k;
-        double d = 1.0 * k2 + 1.41421 * k + 1.0;
-        p.Q = (1.0 * k2) / d;
-        p.R = (-2.0 * 1.0 * k2) / d;
-        p.S = p.Q;
-        p.T = (2.0 * 1.0 - 2.0 * 1.0 * k2) / d;
-        p.U = (1.0 * k2 - 1.41421 * k + 1.0) / d;
-        p.SongSpeed = info.Speed;
-        p.PatternIndex = info.StartPos;
+        double norm = 1.0 / (1.0 + Math.Sqrt(2.0) * k + k2);
+        p.B0 = k2 * norm;
+        p.B1 = 2.0 * p.B0;
+        p.B2 = p.B0;
+        p.A1 = 2.0 * (k2 - 1.0) * norm;
+        p.A2 = (1.0 - Math.Sqrt(2.0) * k + k2) * norm;
+        // as SA_LoadSong: the first interrupt starts the start position
+        p.Speed = info.Speed;
+        p.PatternLength = info.PatternLength;
+        p.OverLinePos = info.StartPos - 1;
+        p.SongSpeedPos = info.Speed;
+        p.OverPatternPos = info.PatternLength;
+        p.CurrentPosition = -1;
+        p.Noise = NetRandom.Create(0x5a);
+        for (var v = 0; v < 4; v += 1)
+            p.Voices[v] = PlayVoice { SynthWave = new uint8[128], Flags = 1 };
         p.Load(0, sampleRate * 2, false);
         return p;
     }
@@ -251,14 +334,12 @@ struct Player
         bool end = false;
         if (HasEnd && size > EndIndex - Processed)
         {
-            // the end (SonicConvert can stop inside a sample of several channels: only whole samples here)
             size = Math.Max(0, EndIndex - Processed);
             numSamples = size / Channels;
             end = true;
         }
-        int whole = numSamples * Channels;
-        var data = new uint8[whole];
-        for (var i = 0; i < whole; i += 1)
+        var data = new uint8[size];
+        for (var i = 0; i < size; i += 1)
             data[i] = Buffer[bufferIndex + i];
         BufferSampleIndex += numSamples;
         Processed += size;
@@ -290,39 +371,82 @@ struct Player
         return all.ToArray();
     }
 
-    // ---- the output ----
+    // ---- Paula ----
 
-    double Filter(int channel, double value)
+    void SetLocation(int channel, uint8[] data, int offset, int length)
     {
-        double output = Q * value + R * LastIn1[channel] + S * LastIn0[channel] - T * LastOut1[channel] - U * LastOut0[channel];
-        LastIn0[channel] = LastIn1[channel];
-        LastIn1[channel] = value;
-        LastOut0[channel] = LastOut1[channel];
-        LastOut1[channel] = output;
-        return output;
+        Paula[channel].Data = data;
+        Paula[channel].Offset = offset;
+        Paula[channel].Length = length;
     }
 
-    double VoiceOutput(int v)
+    void LoadBlock(int channel)
     {
-        var c = Voices[v];
-        if (c.Current.Length == 0 || c.Period < 1)
+        Paula[channel].CurrentData = Paula[channel].Data;
+        Paula[channel].CurrentOffset = Paula[channel].Offset;
+        Paula[channel].CurrentLength = Paula[channel].Length;
+    }
+
+    void StartDma(int channel)
+    {
+        if (Paula[channel].Dma)
+            return;
+        Paula[channel].Dma = true;
+        LoadBlock(channel);
+        Paula[channel].Position = 0.0;
+    }
+
+    bool Playing(int channel)
+    {
+        return Paula[channel].Dma && Paula[channel].CurrentLength > 0 && Paula[channel].Period > 0;
+    }
+
+    double ChannelOutput(int channel)
+    {
+        if (!Playing(channel))
             return 0.0;
-        int next = c.Index == c.Current.Length - 1 ? 0 : c.Index + 1;
-        double left = S8(c.Current[c.Index]) / 128.0;
-        double right = S8(c.Current[next]) / 128.0;
-        return c.Volume * (left + c.Gamma * (right - left)) / 64.0;
+        var c = Paula[channel];
+        int index = (int)c.Position;
+        double value = SignedByte(c.CurrentData, c.CurrentOffset + index) / 128.0;
+        if (Interpolate)
+        {
+            double next = index + 1 < c.CurrentLength ? SignedByte(c.CurrentData, c.CurrentOffset + index + 1) / 128.0
+                                                       : SignedByte(c.Data, c.Offset) / 128.0;
+            value += (c.Position - index) * (next - value);
+        }
+        return Math.Min(64, Math.Max(0, c.Volume)) * value / 64.0;
     }
 
-    double Clamped(double value)
+    void AdvancePaula()
     {
-        return Math.Max(-1.0, Math.Min(1.0, value));
+        for (var channel = 0; channel < 4; channel += 1)
+        {
+            if (!Playing(channel))
+                continue;
+            Paula[channel].Position += Clock / Paula[channel].Period / SampleRate;
+            while (Paula[channel].Position >= Paula[channel].CurrentLength)
+            {
+                Paula[channel].Position -= Paula[channel].CurrentLength;
+                LoadBlock(channel);
+                if (Paula[channel].CurrentLength <= 0)
+                {
+                    Paula[channel].Position = 0.0;
+                    break;
+                }
+            }
+        }
     }
 
-    double Mixed(int channel, double output)
+    double Filtered(int filter, double value)
     {
+        double output = B0 * value + B1 * X1[filter] + B2 * X2[filter] - A1 * Y1[filter] - A2 * Y2[filter];
+        X2[filter] = X1[filter];
+        X1[filter] = value;
+        Y2[filter] = Y1[filter];
+        Y1[filter] = output;
         if (AllowLowPassFilter && UseLowPassFilter)
-            output = Filter(channel, output);
-        return Clamped(output);
+            value = output;
+        return Math.Max(-1.0, Math.Min(1.0, value));
     }
 
     static uint8 ToByte(double value)
@@ -331,705 +455,657 @@ struct Player
         return (uint8)((int)rounded & 0xff);
     }
 
-    // ---- Paula ----
+    // ---- a new row (SA_AdvanceTrack) ----
 
-    void StopVoice(ref PlayVoice c)
+    // plays a row of the pattern for a voice; true when its DMA is turned on at the end of the interrupt
+    bool AdvanceVoice(int t, ref PlayVoice c, Note note, int noteTranspose, int soundTranspose)
     {
-        if (c.Data.Length > 0)
-            c.DataChanged = true;
-        uint8[] none = [];
-        c.Data = none;
-        c.Current = none;
-        c.Index = 0;
-        c.Gamma = 0.0;
-    }
-
-    void StartVoiceData(ref PlayVoice c, double time)
-    {
-        if (c.DataChanged)
+        c.RowNote = note;
+        bool startDma = false;
+        int noteValue = note.Value;
+        int number = note.Instrument;
+        if (noteValue == 0)
         {
-            int size = Math.Max(0, c.Data.Length - c.DataIndex);
-            var copy = new uint8[size];
-            for (var i = 0; i < size; i += 1)
-                copy[i] = c.Data[c.DataIndex + i];
-            c.Current = copy;
-            c.DataChanged = false;
+            if (number != 0)
+                LoadTrackInst(t, ref c, number);
         }
-        c.StartTime = time;
-        c.Index = 0;
-        c.Gamma = 0.0;
-    }
-
-    // the data of a voice ended: a sample with a repeat part goes on there, one with repeat 1 stops, the others
-    // (repeat 0, the synth waves) start again
-    void VoiceFinished(ref PlayVoice c, double time)
-    {
-        if (!c.HasInstrument || M.Instruments[c.Instrument].Repeat == 1)
-            StopVoice(ref c);
-        else if (M.Instruments[c.Instrument].Repeat > 0)
+        else if (noteValue == 0x80)
         {
-            c.SetDataIndex(M.Instruments[c.Instrument].Length * 2);
-            StartVoiceData(ref c, time);
+            // hold (sustain)
         }
-    }
-
-    void UpdateSample(ref PlayVoice c, double time)
-    {
-        if (c.Current.Length == 0 || c.StartTime > time || c.Period < 1)
-        {
-            c.Index = 0;
-            c.Gamma = 0.0;
-            return;
-        }
-        double samplesPerSecond = Clock / (2.0 * c.Period);
-        double voiceTime = time - c.StartTime;
-        double index = samplesPerSecond * voiceTime;
-        int length = c.Current.Length;
-        int left = (int)index;
-        if (left >= length)
-        {
-            VoiceFinished(ref c, time);
-            if (c.Current.Length == 0)
-            {
-                c.Index = 0;
-                c.Gamma = 0.0;
-                return;
-            }
-            index -= length;
-            left = 0;
-            c.StartTime = time;
-        }
-        c.Index = left;
-        c.Gamma = index - left;
-    }
-
-    // ---- notes ----
-
-    void ResetEffectState(ref PlayVoice c)
-    {
-        if (c.HasInstrument)
-        {
-            var inst = M.Instruments[c.Instrument];
-            c.Finetuning = inst.FineTuning;
-            c.EffectDelayCounter = inst.EffectDelay;
-            c.AmfDelayCounter = inst.AmfDelay;
-            c.AdsrDelayCounter = inst.AdsrDelay;
-            c.SustainCounter = inst.SustainVal;
-            c.CurrentEffectIndex = inst.Effect2;
-        }
+        else if (noteValue == 0x7f)
+            ClrTrackInst(t, ref c);
         else
         {
-            c.Finetuning = 0;
-            c.EffectDelayCounter = 1;
-            c.AmfDelayCounter = 1;
-            c.AdsrDelayCounter = 1;
-            c.SustainCounter = 1;
-            c.CurrentEffectIndex = 0;
+            if (!note.NoNoteTranspose())
+                noteValue += noteTranspose;
+            if (number != 0 && !note.NoSoundTranspose())
+                number += soundTranspose;
+            number &= 0xff;
+            c.PrevNote = c.CurrNote;
+            c.CurrNote = noteValue;
+            if (c.PrevNote == 0)
+                c.PrevNote = noteValue;
+            // a sample is started again from the beginning: the DMA goes off
+            if (!c.SyntheticMode)
+            {
+                Paula[t].Dma = false;
+                SetLocation(t, Paula[t].Data, Paula[t].Offset, 2);
+                Paula[t].Period = 114;
+            }
+            if (number == 0)
+            {
+                if (!c.HasInstrument)
+                {
+                    // no instrument to play: the note command is not done
+                    ClrTrackInst(t, ref c);
+                    return false;
+                }
+                SetTrackInst(ref c);
+            }
+            else if (!LoadTrackInst(t, ref c, number))
+                return false;
+            c.SyntheticMode = M.Instruments[c.Instrument].IsSynth();
+            startDma = c.SyntheticMode ? LoadTrackSynth(t, ref c) : LoadTrackSample(t, ref c);
         }
-        c.CurrentEffectRuns = 0;
-        c.AdsrIndex = 0;
-        c.AmfIndex = 0;
-        c.InstrumentFinished = false;
-        c.EffectFinished = false;
-        c.FadeOutVolume = ((c.NoteVolume * MasterVolume) >> 6) * 4;
+        ApplyNoteEffect(ref c, note);
+        return startDma;
     }
 
-    // a new instrument (1-based); false when the module has no such instrument
-    bool InitState(ref PlayVoice c, int instrument)
+    bool LoadTrackSample(int t, ref PlayVoice c)
     {
-        if (instrument <= 0 || instrument > M.Instruments.Count())
+        var inst = M.Instruments[c.Instrument];
+        int sample = inst.SampleWaveNo;
+        if (sample < 0 || sample >= M.Samples.Count() || M.Samples[sample].Data.Length == 0)
+        {
+            ClrTrackInst(t, ref c);
+            c.Flags |= 1;
             return false;
-        var inst = M.Instruments[instrument - 1];
-        c.HasInstrument = true;
-        c.Instrument = instrument - 1;
-        ResetEffectState(ref c);
-        c.NoteOff = false;
-        c.NoteVolume = inst.Volume;
-        c.VibratoDelayCounter = VibratoDelayOf(inst);
-        c.VibratoIndex = 0;
-        c.VibratoLevel = inst.VibLevel;
-        c.VibratoSpeed = inst.VibSpeed;
-        c.PeriodReductionPerTick = 0;
-        c.VolumeChangePerTick = 0;
-        c.CurrentArpeggioIndex = 0;
-        c.CurrentNotePortamentoPeriod = inst.Portamento;
-        c.LastNotePortamentoPeriod = 0;
+        }
+        var data = M.Samples[sample].Data;
+        int words = (inst.Length & 0xffff) + (inst.Repeat == 1 ? 0 : inst.Repeat & 0xffff);
+        SetLocation(t, data, 0, Math.Min(words * 2, data.Length));
+        // the repeat part is set in the next interrupt
+        c.SampleRepeat = true;
         return true;
     }
 
-    void Mute(ref PlayVoice c)
+    bool LoadTrackSynth(int t, ref PlayVoice c)
     {
-        c.NoteOff = true;
-        c.InstrumentFinished = true;
-        c.EffectFinished = true;
-        c.NoteVolume = 0;
-        c.FadeOutVolume = 0;
-        StopVoice(ref c);
-    }
-
-    // a row of the pattern for a voice: a new note, a new instrument, or nothing
-    void Play(ref PlayVoice c, Note note, int noteTranspose, int soundTranspose, double time)
-    {
-        int noteId = note.Value;
-        int instrument = note.Instrument;
-        c.HasNote = true;
-        c.CurrentNote = note;
-        c.DivisionTick = 0;
-        if (noteId == 0)
-        {
-            if (instrument != 0 && !InitState(ref c, instrument))
-                Mute(ref c);
-            return;
-        }
-        if (noteId == 0x80)
-            return;
-        if (noteId == 0x7f)
-        {
-            Mute(ref c);
-            return;
-        }
-        if (!note.NoSoundTranspose() && instrument != 0)
-            instrument += soundTranspose;
-        if (!note.NoNoteTranspose())
-            noteId += noteTranspose;
-        c.LastNoteIndex = c.CurrentNoteIndex;
-        c.CurrentNoteIndex = noteId;
-        if (c.LastNoteIndex == 0)
-            c.LastNoteIndex = noteId;
-        if (instrument <= 0)
-        {
-            if (!c.HasInstrument)
-            {
-                Mute(ref c);
-                return;
-            }
-            ResetEffectState(ref c);
-        }
-        else if (!InitState(ref c, instrument))
-        {
-            Mute(ref c);
-            return;
-        }
         var inst = M.Instruments[c.Instrument];
-        uint8[] source = [];
-        if (inst.IsSynth())
-        {
-            if (inst.SampleWaveNo >= 0 && inst.SampleWaveNo < M.Waves.Count())
-                source = M.Waves[inst.SampleWaveNo];
-        }
-        else if (inst.SampleWaveNo >= 0 && inst.SampleWaveNo < M.Samples.Count())
-            source = M.Samples[inst.SampleWaveNo].Data;
-        if (source.Length == 0)
-        {
-            c.InstrumentFinished = true;
-            Mute(ref c);
-            return;
-        }
-        int length = inst.Length * 2;
-        if (!inst.IsSynth() && inst.Repeat > 1)
-            length += inst.Repeat * 2;
-        length = Math.Max(0, Math.Min(length, source.Length));
-        if (length == 0)
-        {
-            Mute(ref c);
-            return;
-        }
-        var data = new uint8[length];
-        for (var i = 0; i < length; i += 1)
-            data[i] = source[i];
-        c.SetData(data);
-        c.SetDataIndex(0);
-        c.Period = PeriodOf(c.CurrentNoteIndex);
-        c.Volume = (c.NoteVolume * MasterVolume) >> 6;
-        StartVoiceData(ref c, time);
+        int words = inst.Length;
+        SetLocation(t, c.SynthWave, 0, Math.Max(0, Math.Min(words * 2, c.SynthWave.Length)));
+        // the wave is copied in blocks of 16 bytes
+        int bytes = Math.Min(128, (((words - 1) >> 3) + 1) * 16);
+        for (var i = 0; i < bytes; i += 1)
+            c.SynthWave[i] = (uint8)WaveByte(M.Waves, inst.SampleWaveNo, i);
+        c.SampleRepeat = false;
+        return true;
     }
 
-    // the command of a row; a position jump or pattern break sets the next row and position
-    void NoteCommand(ref PlayVoice c, Note note, ref int nextRow, ref int nextPosition)
+    // the interrupt after a sample was started: its repeat part from now on, or silence if its repeat is 1
+    void RepeatSample(int t, ref PlayVoice c)
     {
-        c.PeriodReductionPerTick = 0;
-        c.VolumeChangePerTick = 0;
+        if (!c.SampleRepeat)
+            return;
+        c.SampleRepeat = false;
+        if (!c.HasInstrument || M.Instruments[c.Instrument].Repeat == 0)
+            return;
+        var inst = M.Instruments[c.Instrument];
+        bool hasData = inst.SampleWaveNo >= 0 && inst.SampleWaveNo < M.Samples.Count();
+        if (inst.Repeat == 1 || !hasData)
+        {
+            SetLocation(t, Silence, 0, 2);
+            return;
+        }
+        var data = M.Samples[inst.SampleWaveNo].Data;
+        int start = (inst.Length & 0xffff) * 2;
+        SetLocation(t, data, start, Math.Max(0, Math.Min((inst.Repeat & 0xffff) * 2, data.Length - start)));
+    }
+
+    bool LoadTrackInst(int t, ref PlayVoice c, int number)
+    {
+        if (number <= 0 || number > M.Instruments.Count())
+        {
+            ClrTrackInst(t, ref c);
+            return false;
+        }
+        var inst = M.Instruments[number - 1];
+        c.HasInstrument = true;
+        c.Instrument = number - 1;
+        c.Volume = inst.Volume;
+        c.PortamentoValue = inst.Portamento;
+        c.Portamento = 0;
+        c.VibratoPos = 0;
+        c.VibratoDelay = inst.VibDelay;
+        SetTrackInst(ref c);
+        return true;
+    }
+
+    void SetTrackInst(ref PlayVoice c)
+    {
+        var inst = M.Instruments[c.Instrument];
+        c.FineTuning = S8(inst.FineTuning);
+        c.AdsrDelay = inst.AdsrDelay;
+        c.AdsrPos = 0;
+        c.SustainPos = 0;
+        c.AmfDelay = inst.AmfDelay;
+        c.AmfPos = 0;
+        c.SynthEffectPos = inst.Effect2;
+        c.SynthPos = 0;
+        c.SynthDelay = inst.EffectDelay;
+        c.ArpeggioPos = 0;
+        c.SimpleArpeggioPos = 0;
+        c.VolumeLevel = ((c.Volume * MasterVolume) >> 6) * 4;
+        c.Flags = 0;
+    }
+
+    void ClrTrackInst(int t, ref PlayVoice c)
+    {
+        Paula[t].Volume = 0;
+        SetLocation(t, Silence, 0, 2);
+        c.Volume = 0;
+        c.VolumeLevel = 0;
+        c.HasInstrument = false;
+        c.SampleRepeat = false;
+    }
+
+    // ---- note commands (SA_ApplyNoteEffect) ----
+
+    void ApplyNoteEffect(ref PlayVoice c, Note note)
+    {
+        c.PitchBend = 0;
+        c.VolumeSlide = 0;
         int param = note.Param;
+        int signedParam = S8(param);
         switch (note.Command())
         {
-        case 0x1: // slide: the period changes by this every tick
-            c.PeriodReductionPerTick = S8(param);
+        case 0x1:
+            c.PitchBend = signedParam;
             break;
-        case 0x2: // the ADSR index
-        {
-            int max = 0;
-            if (c.HasInstrument)
-                max = Math.Max(0, M.Instruments[c.Instrument].AdsrLength + M.Instruments[c.Instrument].AdsrRepeat - 1);
-            c.AdsrIndex = Math.Min(param, max);
+        case 0x2:
+            c.AdsrPos = param;
             break;
-        }
-        case 0x4:
-            c.VibratoDelayCounter = 0;
+        case 0x4: // the vibrato starts now (speed and level stay those of the instrument)
+            c.VibratoDelay = 0;
             break;
-        case 0x5:
-            c.VibratoSpeed = 2 * (param >> 4);
-            c.VibratoLevel = S8(160 - (param & 0xf) * 16);
+        case 0x5: // the sync value for the program that plays the music
+            SyncValue = param;
             break;
-        case 0x6: // the master volume, for all voices
-            MasterVolume = Math.Max(0, Math.Min(64, param));
+        case 0x6:
+            MasterVolume = param & 0x3f;
             break;
         case 0x7:
-            c.CurrentNotePortamentoPeriod = param;
+            c.PortamentoValue = param;
             break;
         case 0x8:
-            c.CurrentNotePortamentoPeriod = 0;
+            c.PortamentoValue = 0;
+            break;
+        case 0x9:
+            if (param > 0 && param <= 64)
+                PatternLength = param;
             break;
         case 0xa:
-            if ((param & 0xf0) != 0)
-                c.VolumeChangePerTick = param >> 4;
-            else
-                c.VolumeChangePerTick = -(param & 0xf);
+            c.VolumeSlide = signedParam;
             break;
-        case 0xb: // position jump: on at row 0 of that position
-            nextRow = 0;
-            nextPosition = Math.Max(0, (param - 1) & 0x7f);
+        case 0xb:
+            OverLinePos = param - 1;
+            OverPatternPos = PatternLength;
             break;
         case 0xc:
-            c.NoteVolume = Math.Min(64, param);
-            c.FadeOutVolume = ((MasterVolume * c.NoteVolume) >> 6) * 4;
+            c.Volume = Math.Min(64, param);
+            c.VolumeLevel = ((MasterVolume * c.Volume) >> 6) * 4;
             break;
-        case 0xd: // pattern break: on at row 0 of the next position
-            nextRow = 0;
-            nextPosition = PatternIndex + 1;
+        case 0xd:
+            OverPatternPos = PatternLength;
             break;
-        case 0xe: // the LED, and the low pass filter with it
+        case 0xe: // the power LED: 0 turns the filter on, other values turn it off
             UseLowPassFilter = param == 0;
             break;
         case 0xf:
-            SongSpeed = Math.Max(1, Math.Min(param, 16));
+            if (signedParam > 0 && signedParam <= 16)
+                Speed = param;
             break;
-        default: // 0 (arpeggio, in Tick), 3 (unused), 9 (pattern length: not done)
+        default:
             break;
         }
     }
 
-    // the next row of the pattern for the 4 voices
-    void ProcessNotes(int bufferIndex, bool loop)
+    // ---- the bytes after the effect values of an instrument: the 3 arpeggio tables and the name ----
+
+    static int ArpeggioByte(Instrument inst, int offset)
     {
-        int nextRow = -1;
-        int nextPosition = -1;
-        for (var v = 0; v < 4; v += 1)
+        if (offset < 0)
+            return 0;
+        int table = offset / 16;
+        if (table < 3)
         {
-            int at = PatternIndex * 4 + v;
-            var voice = at < M.Voices.Count() ? M.Voices[at] : new Voice();
-            var note = M.NoteAt(voice.NoteAddress + NoteIndex);
-            var c = Voices[v];
-            Play(ref c, note, voice.NoteTranspose, voice.SoundTranspose, PlayTime);
-            int row = -1;
-            int position = -1;
-            NoteCommand(ref c, note, ref row, ref position);
-            Voices[v] = c;
-            if (row >= 0)
-                nextRow = row;
-            if (position >= 0)
-                nextPosition = position;
+            var arp = inst.Arpeggios[table];
+            int i = offset % 16;
+            if (i == 0)
+                return arp.Length;
+            if (i == 1)
+                return arp.Repeat;
+            return i - 2 < arp.Data.Length ? arp.Data[i - 2] : 0;
         }
-        if (nextRow >= 0)
-        {
-            NoteIndex = nextRow;
-            if (nextPosition >= 0)
-                PatternIndex = nextPosition;
-        }
-        else
-            NoteIndex += 1;
-        if (NoteIndex >= Song.PatternLength)
-        {
-            NoteIndex = 0;
-            if (nextPosition >= 0)
-                PatternIndex = nextPosition;
-            else
-                PatternIndex += 1;
-        }
-        if (PatternIndex > Song.StopPos)
-        {
-            if (loop)
-            {
-                LoopCounter += 1;
-                PatternIndex = Math.Min(Song.RepeatPos, Song.StopPos);
-            }
-            else
-            {
-                // one more row until the end
-                int remaining = (int)((double)SongSpeed / Song.TicksPerSecond * SampleRate);
-                HasEnd = true;
-                EndIndex = Processed + bufferIndex + remaining * Channels - 1;
-            }
-        }
+        // the name as SonicConvert reads it: up to the first zero, other bytes than ASCII as '?'
+        int n = offset - 48;
+        int length = 0;
+        while (length < inst.Name.Length && inst.Name[length] != 0)
+            length += 1;
+        if (n >= length)
+            return 0;
+        return inst.Name[n] < 128 ? inst.Name[n] : 63;
     }
 
-    // ---- the interrupt: effects, envelopes, vibrato, portamento ----
+    // ---- every tick (SA_ProcessTrack) ----
 
-    void Tick(ref PlayVoice c, int speed)
+    void ProcessVoice(int t, ref PlayVoice c)
     {
-        c.DivisionTick = (c.DivisionTick + 1) % speed;
-        if (!c.HasNote || c.NoteOff || c.InstrumentFinished || !c.HasInstrument)
+        if ((c.Flags & 1) != 0 || !c.HasInstrument)
         {
-            if (c.FadeOutVolume > 0)
-                c.FadeOutVolume -= 4;
+            Paula[t].Volume = 0;
+            SetLocation(t, Silence, 0, 2);
+            if (c.VolumeLevel != 0)
+                c.VolumeLevel -= 4;
             return;
         }
-        var note = c.CurrentNote;
         var inst = M.Instruments[c.Instrument];
-        int noteId = c.CurrentNoteIndex;
-        int lastNoteId = c.LastNoteIndex;
-
-        if (note.Arpeggio() == 0)
+        int note = c.CurrNote;
+        int lastNote = c.PrevNote;
+        int arpeggio = c.RowNote.Arpeggio();
+        if (arpeggio != 0)
         {
-            // command 0 with a parameter: the note, the note + x semitones, the note + y semitones
-            if (note.Command() == 0 && note.Param != 0)
-            {
-                if (c.CurrentArpeggioCommandIteration == 0)
-                    c.CurrentArpeggioCommandIteration += 1;
-                else if (c.CurrentArpeggioCommandIteration == 1)
-                {
-                    noteId += note.Param >> 4;
-                    c.CurrentArpeggioCommandIteration += 1;
-                }
-                else
-                {
-                    noteId += note.Param & 0xf;
-                    c.CurrentArpeggioCommandIteration = 0;
-                }
-            }
+            // the arpeggio table of the instrument: the notes are bytes
+            int table = (arpeggio - 1) * 16;
+            int offset = ArpeggioByte(inst, table + 2 + c.ArpeggioPos);
+            note = (note & ~0xff) | ((note + offset) & 0xff);
+            lastNote = (lastNote & ~0xff) | ((lastNote + offset) & 0xff);
+            c.ArpeggioPos += 1;
+            int length = ArpeggioByte(inst, table);
+            if (((length + ArpeggioByte(inst, table + 1)) & 0xff) <= c.ArpeggioPos)
+                c.ArpeggioPos = length;
         }
-        else
+        else if (c.RowNote.Command() == 0 && c.RowNote.Param != 0)
         {
-            // the arpeggio table of the instrument
-            var arpeggio = inst.Arpeggios[note.Arpeggio() - 1];
-            int total = Math.Min(14, arpeggio.Length + arpeggio.Repeat);
-            int index = c.CurrentArpeggioIndex;
-            int offset = WaveByte(arpeggio.Data, index);
-            noteId += offset;
-            lastNoteId += offset;
-            index += 1;
-            if (index >= total)
-                index = arpeggio.Length;
-            c.CurrentArpeggioIndex = index;
-        }
-
-        int period = PeriodOf(noteId);
-
-        // portamento
-        if (c.CurrentNotePortamentoPeriod != 0)
-        {
-            if (c.LastNotePortamentoPeriod == 0)
-                c.LastNotePortamentoPeriod = PeriodOf(lastNoteId);
-            int diff = Math.Abs(period - c.LastNotePortamentoPeriod);
-            if (c.CurrentNotePortamentoPeriod > diff)
-                c.CurrentNotePortamentoPeriod = 0;
-            else
+            // command 0: the note, the note + x semitones, the note + y semitones
+            int add = 0;
+            if (c.SimpleArpeggioPos == 0)
+                c.SimpleArpeggioPos += 1;
+            else if (c.SimpleArpeggioPos == 1)
             {
-                int add = c.LastNotePortamentoPeriod < period ? c.CurrentNotePortamentoPeriod : -c.CurrentNotePortamentoPeriod;
-                c.LastNotePortamentoPeriod += add;
-                period = c.LastNotePortamentoPeriod;
-            }
-        }
-
-        // vibrato
-        if (c.VibratoDelayCounter != -1)
-        {
-            if (c.VibratoDelayCounter == 0)
-            {
-                c.VibratoDelayCounter = VibratoDelayOf(inst);
-                if (c.VibratoLevel != 0)
-                    period += S8(VibratoTable[c.VibratoIndex]) * 4 / c.VibratoLevel;
-                c.VibratoIndex = (c.VibratoIndex + c.VibratoSpeed) & 0xff;
+                c.SimpleArpeggioPos += 1;
+                add = (c.RowNote.Param >> 4) & 0xf;
             }
             else
-                c.VibratoDelayCounter -= 1;
+            {
+                c.SimpleArpeggioPos = 0;
+                add = c.RowNote.Param & 0xf;
+            }
+            note += add;
+            lastNote += add;
+        }
+
+        int period = PeriodOf(note);
+        int lastPeriod = PeriodOf(lastNote);
+
+        // portamento: from the last note to this one
+        if (c.PortamentoValue != 0)
+        {
+            if (c.Portamento == 0)
+                c.Portamento = lastPeriod;
+            lastPeriod = c.Portamento;
+            if (Math.Abs(period - lastPeriod) - c.PortamentoValue < 0)
+                c.PortamentoValue = 0;
+            else
+            {
+                lastPeriod += lastPeriod < period ? c.PortamentoValue : -c.PortamentoValue;
+                c.Portamento = lastPeriod;
+                period = lastPeriod;
+            }
+        }
+
+        // vibrato: after its delay in every tick; a delay with a low byte of 255 means no vibrato
+        if ((c.VibratoDelay & 0xff) != 0xff)
+        {
+            if (c.VibratoDelay != 0)
+                c.VibratoDelay -= 1;
+            else
+            {
+                int level = inst.VibLevel;
+                if (level != 0)
+                    period += S8(VibratoTable[c.VibratoPos & 0xff]) * 4 / level;
+                c.VibratoPos = (c.VibratoPos + inst.VibSpeed) & 0xff;
+            }
         }
 
         // AMF: the period changes along a wave
-        int amfTotal = Math.Min(128, inst.AmfLength + inst.AmfRepeat);
-        if (amfTotal != 0 && inst.AmfWave >= 0 && inst.AmfWave < M.AmfWaves.Count())
+        int amfTotal = (inst.AmfLength & 0xffff) + (inst.AmfRepeat & 0xffff);
+        if ((amfTotal & 0xffff) != 0)
         {
-            period -= S8(WaveByte(M.AmfWaves[inst.AmfWave], c.AmfIndex));
-            c.AmfDelayCounter -= 1;
-            if (c.AmfDelayCounter == 0)
+            period -= S8(WaveByte(M.AmfWaves, inst.AmfWave, c.AmfPos));
+            c.AmfDelay = (c.AmfDelay - 1) & 0xffff;
+            if (c.AmfDelay == 0)
             {
-                c.AmfDelayCounter = inst.AmfDelay;
-                c.AmfIndex += 1;
-                if (c.AmfIndex >= amfTotal)
-                    c.AmfIndex = inst.AmfRepeat == 0 ? inst.AmfLength - 1 : inst.AmfLength;
+                c.AmfDelay = inst.AmfDelay;
+                c.AmfPos += 1;
+                if (amfTotal <= c.AmfPos)
+                    c.AmfPos = inst.AmfLength - (inst.AmfRepeat == 0 ? 1 : 0);
             }
         }
 
-        period -= c.Finetuning;
-        if (c.DivisionTick != 0)
-            c.Finetuning += c.PeriodReductionPerTick;
+        period -= c.FineTuning;
+        if (period < 113)
+            period = 113;
+        if (SongSpeedPos != 0)
+            c.FineTuning += c.PitchBend;
+        Paula[t].Period = period;
 
-        // the effects of a synth instrument change its wave (and the fine tuning: used from the next tick on)
-        if (inst.IsSynth() && !c.EffectFinished)
-            ApplyEffects(ref c, inst);
+        if (inst.IsSynth())
+            ApplySynthEffect(ref c, inst);
 
-        int volume = c.NoteVolume;
-
-        // the ADSR envelope
-        int adsrTotal = Math.Min(128, inst.AdsrLength + inst.AdsrRepeat);
-        if (adsrTotal != 0 && inst.AdsrWave >= 0 && inst.AdsrWave < M.AdsrWaves.Count())
+        // the volume, with the ADSR envelope
+        int adsrTotal = (inst.AdsrLength & 0xffff) + (inst.AdsrRepeat & 0xffff);
+        if ((adsrTotal & 0xffff) == 0)
         {
-            int adsrData = WaveByte(M.AdsrWaves[inst.AdsrWave], c.AdsrIndex);
-            int adsrVolume = (adsrData * MasterVolume) >> 6;
-            volume = Math.Max(0, Math.Min(64, (volume * adsrVolume) >> 6));
-            c.FadeOutVolume = volume * 4;
-            bool step = true;
-            if (noteId == 0x80 && c.AdsrIndex >= inst.SustainPt)
-            {
-                // sustain: the index stays, or moves every SustainVal ticks
-                step = false;
-                if (inst.SustainVal != 0)
-                {
-                    if (c.SustainCounter != 0)
-                        c.SustainCounter -= 1;
-                    else
-                    {
-                        c.SustainCounter = inst.SustainVal;
-                        step = true;
-                    }
-                }
-            }
-            if (step)
-            {
-                c.AdsrDelayCounter -= 1;
-                if (c.AdsrDelayCounter == 0)
-                {
-                    c.AdsrDelayCounter = inst.AdsrDelay;
-                    c.AdsrIndex += 1;
-                    if (c.AdsrIndex >= adsrTotal)
-                    {
-                        c.AdsrIndex = inst.AdsrRepeat == 0 ? inst.AdsrLength - 1 : inst.AdsrLength;
-                        if (inst.AdsrRepeat == 0 && adsrData == 0)
-                            c.InstrumentFinished = true;
-                    }
-                }
-            }
+            Paula[t].Volume = (c.Volume * MasterVolume) >> 6;
+            if (c.VolumeLevel != 0)
+                c.VolumeLevel -= 4;
         }
         else
         {
-            volume = Math.Max(0, Math.Min(64, (volume * MasterVolume) >> 6));
-            if (c.FadeOutVolume > 0)
-                c.FadeOutVolume -= 4;
+            int adsr = (WaveByte(M.AdsrWaves, inst.AdsrWave, c.AdsrPos) * MasterVolume) >> 6;
+            int vol = (c.Volume * adsr) >> 6;
+            Paula[t].Volume = vol;
+            c.VolumeLevel = vol * 4;
+            bool step = true;
+            // a held note (0x80) stays at the sustain point, or moves on every SustainVal ticks
+            if (c.RowNote.Value == 0x80 && c.AdsrPos >= inst.SustainPt)
+            {
+                if (inst.SustainVal == 0)
+                    step = false;
+                else if (c.SustainPos != 0)
+                {
+                    c.SustainPos -= 1;
+                    step = false;
+                }
+                else
+                    c.SustainPos = inst.SustainVal;
+            }
+            if (step)
+            {
+                c.AdsrDelay = (c.AdsrDelay - 1) & 0xffff;
+                if (c.AdsrDelay == 0)
+                {
+                    c.AdsrDelay = inst.AdsrDelay;
+                    c.AdsrPos += 1;
+                    if (adsrTotal <= c.AdsrPos)
+                    {
+                        c.AdsrPos = inst.AdsrLength - (inst.AdsrRepeat == 0 ? 1 : 0);
+                        if (inst.AdsrRepeat == 0 && (adsr & 0xff) == 0)
+                            c.Flags |= 1;
+                    }
+                }
+            }
         }
 
-        c.NoteVolume -= c.VolumeChangePerTick;
-        if (period < 1)
-            period = 1;
-        c.NoteVolume = Math.Max(0, Math.Min(64, c.NoteVolume));
-        c.Period = period;
-        c.Volume = volume;
+        c.Volume = Math.Max(0, Math.Min(64, c.Volume + c.VolumeSlide));
     }
 
-    uint32 NextNoise()
-    {
-        // xorshift32
-        Noise ^= Noise << 13;
-        Noise ^= Noise >> 17;
-        Noise ^= Noise << 5;
-        return Noise;
-    }
+    // ---- the effects of synth instruments (SA_ApplySynthEffect) ----
 
-    int NoiseByte()
+    void ApplySynthEffect(ref PlayVoice c, Instrument inst)
     {
-        return (int)(NextNoise() & 0xffu) - 128;
-    }
-
-    uint8[] WaveOf(int wave)
-    {
-        if (wave < 0 || wave >= M.Waves.Count())
-        {
-            uint8[] none = [];
-            return none;
-        }
-        return M.Waves[wave];
-    }
-
-    void ApplyEffects(ref PlayVoice c, Instrument inst)
-    {
-        c.EffectDelayCounter -= 1;
-        if (c.EffectDelayCounter != 0)
+        c.SynthDelay = (c.SynthDelay - 1) & 0xffff;
+        if (c.SynthDelay != 0)
             return;
-        c.EffectDelayCounter = Math.Max(1, inst.EffectDelay);
-        int start = inst.Effect2;
-        int stop = inst.Effect3;
-        switch (inst.Effect)
-        {
-        case 0:
+        c.SynthDelay = inst.EffectDelay;
+        int effect = inst.Effect;
+        if (effect <= 0 || effect > 17)
             return;
+        int e1 = inst.Effect1;
+        int e2 = inst.Effect2;
+        int e3 = inst.Effect3;
+        bool advance = true;
+        switch (effect)
+        {
         case 1: // wave negator
-        {
-            int i = c.CurrentEffectIndex;
-            c.SetSample(i, c.Sample(i) == -128 ? 127 : -c.Sample(i));
+            c.SetByte(c.SynthEffectPos, -c.Byte(c.SynthEffectPos));
             break;
-        }
         case 2: // free negator
         {
-            if (c.InstrumentFinished || c.EffectFinished || c.Current.Length == 0)
-                return;
-            int waveLen = inst.Effect2;
-            int waveRep = inst.Effect3;
-            var source = WaveOf(inst.SampleWaveNo);
-            int offset = WaveByte(WaveOf(inst.Effect1), c.CurrentEffectRuns) & 0x7f;
-            int length = Math.Min(c.Current.Length, inst.Length * 2);
+            advance = false;
+            if ((c.Flags & 4) != 0)
+                break;
+            int offset = WaveByte(M.Waves, e1, c.SynthPos) & 0x7f;
+            int length = (inst.Length * 2) & 0xffff;
             for (var i = offset; i < length; i += 1)
-                c.SetSample(i, S8(WaveByte(source, i)));
+                c.SetByte(i, WaveByte(M.Waves, inst.SampleWaveNo, i));
             for (var i = 0; i < offset; i += 1)
+                c.SetByte(i, -S8(WaveByte(M.Waves, inst.SampleWaveNo, i)));
+            c.SynthPos += 1;
+            if ((c.SynthPos & 0xffff) > ((e2 + e3) & 0xffff))
             {
-                int input = S8(WaveByte(source, i));
-                c.SetSample(i, input == -128 ? 127 : -input);
+                c.SynthPos = e2;
+                if (e3 == 0 && offset == 0)
+                    c.Flags |= 4;
             }
-            c.CurrentEffectRuns += 1;
-            if (c.CurrentEffectRuns < waveLen + waveRep)
-                return;
-            c.CurrentEffectRuns = waveLen;
-            if (waveRep != 0)
-                return;
-            if (offset != 0)
-            {
-                c.CurrentEffectRuns -= 1;
-                return;
-            }
-            c.EffectFinished = true;
             break;
         }
         case 3: // rotate vertical
+            for (var i = e2; i <= e3; i += 1)
+                c.SetByte(i, c.Byte(i) + e1);
+            break;
+        case 4: // rotate horizontal: the bytes from Effect2 to Effect3 + 1 rotate by one
         {
-            int delta = S8(inst.Effect1);
-            for (var i = start; i <= stop; i += 1)
-                c.SetSample(i, S8(c.Sample(i) + delta));
+            int first = c.Byte(e2);
+            int i = e2;
+            int count = e3 - e2;
+            c.SetByte(i, c.Byte(i + 1));
+            i += 1;
+            count -= 1;
+            while (count >= 0)
+            {
+                c.SetByte(i, c.Byte(i + 1));
+                i += 1;
+                count -= 1;
+            }
+            c.SetByte(i, first);
             break;
         }
-        case 4: // rotate horizontal
-        {
-            int first = c.Sample(start);
-            for (var i = start; i < stop; i += 1)
-                c.SetSample(i, c.Sample(i + 1));
-            c.SetSample(stop, first);
+        case 5: // alien voice
+            advance = false;
+            for (var i = e2; i <= e3; i += 1)
+                c.SetByte(i, c.Byte(i) + WaveByte(M.Waves, e1, i));
             break;
-        }
-        case 5: // alien voice: adds another wave
-        {
-            var wave = WaveOf(inst.Effect1);
-            for (var i = start; i <= stop; i += 1)
-                c.SetSample(i, S8(c.Sample(i) + WaveByte(wave, i)));
-            break;
-        }
         case 6: // poly negator
         {
-            int index = c.CurrentEffectIndex;
-            c.SetSample(index, S8(WaveByte(WaveOf(inst.SampleWaveNo), index)));
-            index = index >= stop ? start : index + 1;
-            c.SetSample(index, S8(-c.Sample(index)));
+            int pos = c.SynthEffectPos;
+            c.SetByte(pos, WaveByte(M.Waves, inst.SampleWaveNo, pos));
+            if (pos >= e3)
+                pos = e2 - 1;
+            c.SetByte(pos + 1, -c.Byte(pos + 1));
             break;
         }
         case 7: // shack wave 1
-            ShackWave(ref c, inst);
+            ShackWave(ref c, e1, e2, e3);
             break;
         case 8: // shack wave 2
-        {
-            ShackWave(ref c, inst);
-            int index = start + c.CurrentEffectRuns;
-            c.SetSample(index, c.Sample(index) == -128 ? 127 : -c.Sample(index));
-            c.CurrentEffectRuns += 1;
-            if (c.CurrentEffectRuns == stop - start)
-                c.CurrentEffectRuns = 0;
+            ShackWave(ref c, e1, e2, e3);
+            c.SetByte(e2 + c.SynthPos, -c.Byte(e2 + c.SynthPos));
+            c.SynthPos += 1;
+            if (e3 - e2 < c.SynthPos)
+                c.SynthPos = 0;
             break;
-        }
+        case 9: // metamorph: the wave changes step by step into the effect wave
+            advance = false;
+            if ((c.Flags & 2) == 0)
+                Morph(ref c, e1, e2, e3);
+            break;
+        case 15: // oscillator 1: the wave changes into the effect wave and back, again and again
+            advance = false;
+            if ((c.Flags & 2) != 0)
+            {
+                c.Flags ^= 8;
+                c.Flags &= ~2;
+            }
+            Morph(ref c, (c.Flags & 8) != 0 ? inst.SampleWaveNo : e1, e2, e3);
+            break;
         case 10: // laser AMF
-        {
-            if (c.CurrentEffectRuns < inst.Effect3)
+            if ((e3 & 0xffff) > (c.SynthPos & 0xffff))
             {
-                c.Finetuning += inst.Effect2;
-                c.CurrentEffectRuns += 1;
+                c.FineTuning += S8(e2);
+                c.SynthPos += 1;
             }
             break;
-        }
         case 11: // wave alias
-        {
-            int delta = inst.Effect1;
-            for (var i = start; i <= stop; i += 1)
-            {
-                int next = i == stop ? c.Sample(start) : c.Sample(i + 1);
-                if (c.Sample(i) <= next)
-                    c.SetSample(i, S8(c.Sample(i) + delta));
-                else
-                    c.SetSample(i, S8(c.Sample(i) - delta));
-            }
+            for (var i = e2; i <= e3; i += 1)
+                c.SetByte(i, c.Byte(i) > c.Byte(i + 1) ? c.Byte(i) - e1 : c.Byte(i) + e1);
             break;
-        }
-        case 12: // noise generator
-            c.SetSample(c.CurrentEffectIndex, NoiseByte());
+        case 12: // noise generator (the original uses the horizontal position of the beam)
+            c.SetByte(c.SynthEffectPos, c.Byte(c.SynthEffectPos) ^ Noise.Next(256));
+            break;
+        case 16: // noise generator 2
+            advance = false;
+            for (var i = e3; i >= e2; i -= 1)
+            {
+                int value = (c.Byte(i) ^ 5) & 0xff;
+                value = ((value << 2) | (value >> 6)) & 0xff;
+                c.SetByte(i, value + Noise.Next(256));
+            }
             break;
         case 13: // low pass filter 1
-        {
-            int delta = inst.Effect1;
-            for (var i = start; i <= stop; i += 1)
-            {
-                int next = i == stop ? c.Sample(start) : c.Sample(i + 1);
-                int diff = Math.Abs(c.Sample(i) - next);
-                if (delta < diff)
-                    c.SetSample(i, next >= c.Sample(i) ? Math.Min(127, c.Sample(i) + 2) : Math.Max(-128, c.Sample(i) - 2));
-            }
+            LowPass(ref c, e2, e3, e1, -1, false);
             break;
-        }
-        case 14: // low pass filter 2: the limits come from a wave
-        {
-            if (inst.Effect1 >= 0 && inst.Effect1 < M.Waves.Count())
-            {
-                var wave = M.Waves[inst.Effect1];
-                for (var i = start; i <= stop; i += 1)
-                {
-                    int next = i == stop ? c.Sample(start) : c.Sample(i + 1);
-                    int diff = Math.Abs(c.Sample(i) - next);
-                    if (WaveByte(wave, i) < diff)
-                        c.SetSample(i, next >= c.Sample(i) ? Math.Min(127, c.Sample(i) + 2) : Math.Max(-128, c.Sample(i) - 2));
-                }
-            }
+        case 14: // low pass filter 2: the limits come from the effect wave, read from Effect3 on
+            LowPass(ref c, e2, e3, 0, e1, true);
             break;
-        }
-        case 16: // noise generator 2
-        {
-            for (var i = start; i <= stop; i += 1)
-            {
-                int value = c.Sample(i);
-                c.SetSample(i, S8(((value ^ 5) << 2) | ((value >> 6) + NoiseByte())));
-            }
-            break;
-        }
         case 17: // FM drum
-        {
-            if (c.CurrentEffectRuns > inst.Effect3)
+            if ((e3 & 0xffff) <= (c.SynthPos & 0xffff))
             {
-                c.Finetuning = inst.FineTuning;
-                c.CurrentEffectRuns = 0;
+                c.FineTuning = inst.FineTuning;
+                c.SynthPos = 0;
             }
-            c.Finetuning -= inst.Effect1 * inst.Effect2;
-            c.CurrentEffectRuns += 1;
+            c.FineTuning = S16(c.FineTuning - (((e2 & 0xffff) * (e1 & 0xffff)) & 0xffff));
+            c.SynthPos += 1;
+            break;
+        default:
             break;
         }
-        default: // 9 (Metawdrpk) and 15 (oscillator 1) are not done, like in SonicConvert
-            break;
+        if (advance)
+        {
+            c.SynthEffectPos += 1;
+            if ((c.SynthEffectPos & 0xffff) > (e3 & 0xffff))
+                c.SynthEffectPos = e2;
         }
-        // the effects with an index have start and stop in Effect2 and Effect3
-        c.CurrentEffectIndex += 1;
-        if (c.CurrentEffectIndex > inst.Effect3)
-            c.CurrentEffectIndex = inst.Effect2;
     }
 
-    void ShackWave(ref PlayVoice c, Instrument inst)
+    // the same value of the effect wave is added to all bytes
+    void ShackWave(ref PlayVoice c, int e1, int e2, int e3)
     {
-        var wave = WaveOf(inst.Effect1);
-        int offset = c.CurrentEffectIndex;
-        for (var i = inst.Effect2; i <= inst.Effect3; i += 1)
+        int value = WaveByte(M.Waves, e1, e2 + c.SynthEffectPos);
+        for (var i = e2; i <= e3; i += 1)
+            c.SetByte(i, c.Byte(i) + value);
+    }
+
+    // each byte moves one step towards the wave; when none moves, the morph has ended
+    void Morph(ref PlayVoice c, int wave, int e2, int e3)
+    {
+        bool changed = false;
+        for (var i = e2; i <= e3; i += 1)
         {
-            int index = offset + i;
-            int add = index >= c.Current.Length || index >= wave.Length ? 0 : WaveByte(wave, index);
-            c.SetSample(i, S8(c.Sample(i) + add));
+            int value = c.Byte(i);
+            int target = S8(WaveByte(M.Waves, wave, i));
+            if (value == target)
+                continue;
+            changed = true;
+            c.SetByte(i, value < target ? value + 1 : value - 1);
         }
+        if (!changed)
+            c.Flags |= 2;
+    }
+
+    // the bytes that differ from the next one by more than the limit move 2 towards it
+    void LowPass(ref PlayVoice c, int e2, int e3, int limit, int wave, bool fromWave)
+    {
+        for (var i = e2; i <= e3; i += 1)
+        {
+            int value = c.Byte(i);
+            int next = i == e3 ? c.Byte(e2) : c.Byte(i + 1);
+            bool up = value <= next;
+            int diff = S8(value - next);
+            if (diff < 0)
+                diff = (-diff) & 0xff;
+            int max = fromWave ? WaveByte(M.Waves, wave, e3 + i - e2) & 0x7f : S16(limit);
+            if (diff > max)
+                c.SetByte(i, up ? value + 2 : value - 2);
+        }
+    }
+
+    // ---- the interrupt (SA_IrqLowLevel) ----
+
+    void Interrupt(int bufferIndex, bool loop)
+    {
+        for (var v = 0; v < 4; v += 1)
+        {
+            var c = Voices[v];
+            RepeatSample(v, ref c);
+            Voices[v] = c;
+        }
+        bool[] startDma = new bool[4];
+        SongSpeedPos += 1;
+        if (SongSpeedPos >= Speed)
+        {
+            SongSpeedPos = 0;
+            if (!AdvanceSong(bufferIndex, loop))
+                return;
+            for (var v = 0; v < 4; v += 1)
+            {
+                var voice = M.Voices[CurrentPosition * 4 + v];
+                var note = M.NoteAt(voice.NoteAddress + OverPatternPos);
+                var c = Voices[v];
+                startDma[v] = AdvanceVoice(v, ref c, note, voice.NoteTranspose, voice.SoundTranspose);
+                Voices[v] = c;
+            }
+        }
+        for (var v = 0; v < 4; v += 1)
+        {
+            var c = Voices[v];
+            ProcessVoice(v, ref c);
+            Voices[v] = c;
+        }
+        for (var v = 0; v < 4; v += 1)
+        {
+            if (startDma[v])
+                StartDma(v);
+        }
+    }
+
+    // the next row (SA_AdvanceSong): the next row of the pattern, or the first row of the next position; after the stop
+    // position the song goes on at the repeat position. Going back to a position played already ends the song, unless
+    // it loops. False when the song ended.
+    bool AdvanceSong(int bufferIndex, bool loop)
+    {
+        OverPatternPos += 1;
+        if (OverPatternPos < PatternLength && CurrentPosition >= 0)
+            return true;
+        OverPatternPos = 0;
+        OverLinePos += 1;
+        if (Song.StopPos < OverLinePos)
+            OverLinePos = Song.RepeatPos;
+        int position = Math.Max(0, Math.Min(OverLinePos, M.Positions() - 1));
+        if (CurrentPosition >= 0 && position <= CurrentPosition)
+        {
+            if (!loop)
+            {
+                HasEnd = true;
+                EndIndex = Processed + bufferIndex;
+                return false;
+            }
+            LoopCounter += 1;
+        }
+        CurrentPosition = position;
+        return true;
     }
 
     // ---- making the samples ----
@@ -1040,48 +1116,25 @@ struct Player
         double deltaTime = (double)numSamples / SampleRate - 0.1 * tick;
         for (double d = 0.0; d < deltaTime; d += tick)
         {
-            if (HasEnd && EndIndex == Processed + bufferIndex)
+            if (HasEnd && Processed + bufferIndex >= EndIndex)
                 return;
-            bool processTick = NextInterruptTime <= PlayTime;
-            if (processTick)
+            if (NextInterruptTime <= PlayTime)
             {
-                bool row = DivisionTick % SongSpeed == 0;
-                DivisionTick += 1;
-                if (row)
-                    ProcessNotes(bufferIndex, loop);
-            }
-            for (var v = 0; v < 4; v += 1)
-            {
-                var c = Voices[v];
-                UpdateSample(ref c, PlayTime);
-                Voices[v] = c;
-            }
-            if (processTick)
-            {
-                for (var v = 0; v < 4; v += 1)
-                {
-                    var c = Voices[v];
-                    Tick(ref c, SongSpeed);
-                    Voices[v] = c;
-                }
+                Interrupt(bufferIndex, loop);
                 NextInterruptTime += InterruptDelay;
+                if (HasEnd && Processed + bufferIndex >= EndIndex)
+                    return;
             }
             if (Mode == ChannelMode.Quad)
             {
                 for (var v = 0; v < 4; v += 1)
-                    Buffer[bufferIndex + v] = ToByte(Mixed(v, VoiceOutput(v)) * 128.0);
+                    Buffer[bufferIndex + v] = ToByte(Filtered(v, ChannelOutput(v)) * 128.0);
                 bufferIndex += 4;
             }
             else if (Mode == ChannelMode.Stereo)
             {
-                double left = 0.0;
-                left += 0.5 * VoiceOutput(0);
-                left += 0.5 * VoiceOutput(3);
-                left = Mixed(0, left) * 128.0;
-                double right = 0.0;
-                right += 0.5 * VoiceOutput(1);
-                right += 0.5 * VoiceOutput(2);
-                right = Mixed(1, right) * 128.0;
+                double left = Filtered(0, 0.5 * ChannelOutput(0) + 0.5 * ChannelOutput(3)) * 128.0;
+                double right = Filtered(1, 0.5 * ChannelOutput(1) + 0.5 * ChannelOutput(2)) * 128.0;
                 Buffer[bufferIndex] = ToByte(left);
                 Buffer[bufferIndex + 1] = ToByte(right);
                 bufferIndex += 2;
@@ -1090,10 +1143,11 @@ struct Player
             {
                 double output = 0.0;
                 for (var v = 0; v < 4; v += 1)
-                    output += 0.25 * VoiceOutput(v);
-                Buffer[bufferIndex] = ToByte(Mixed(0, output) * 128.0);
+                    output += 0.25 * ChannelOutput(v);
+                Buffer[bufferIndex] = ToByte(Filtered(0, output) * 128.0);
                 bufferIndex += 1;
             }
+            AdvancePaula();
             PlayTime += tick;
         }
     }

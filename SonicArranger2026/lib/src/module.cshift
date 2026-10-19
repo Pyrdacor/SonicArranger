@@ -1,0 +1,235 @@
+//! The data of a Sonic Arranger module: songs, the over table (4 voices per position), the note table, instruments,
+//! synth waves, ADSR and AMF waves and samples. Every value is kept as it is in the file (also the bytes nobody knows
+//! the meaning of), so a module that is loaded and saved again stays the same.
+
+namespace SonicArranger;
+
+using System;
+
+/// One song (subsong) of a module: its positions in the over table and its timing.
+struct SongInfo
+{
+    /// Ticks per row (1 to 16, 6 by default); note command F changes it while playing.
+    int Speed;
+    /// Rows of a pattern (64 by default); note command 9 changes it while playing.
+    int PatternLength;
+    /// First position of the song.
+    int StartPos;
+    /// Last position of the song (inclusive).
+    int StopPos;
+    /// Where the song goes on after the last position.
+    int RepeatPos;
+    /// Ticks (interrupts) per second, 50 by default.
+    int TicksPerSecond;
+
+    /// Beats per minute at the start, as Sonic Arranger shows them (125 with speed 6 and 50 ticks per second).
+    int Bpm()
+    {
+        if (Speed == 0)
+            return 0;
+        return 60 * TicksPerSecond / 24 * 6 / Speed;
+    }
+}
+
+/// One voice of one position in the over table: the pattern (the address of its first note in the note table) and the
+/// transposes for it.
+struct Voice
+{
+    int NoteAddress;
+    /// Added to the instrument of each note (unless the note disables it).
+    int SoundTranspose;
+    /// Added to the note value of each note (unless the note disables it).
+    int NoteTranspose;
+}
+
+/// One row of a voice in a pattern.
+struct Note
+{
+    /// 0 no note, 1 to 108 the notes C-0 to B-8 (higher values are special for the replayer).
+    int Value;
+    /// 1-based instrument, 0 none.
+    int Instrument;
+    /// Bit 7: no sound transpose, bit 6: no note transpose, bits 5-4: arpeggio table (1 to 3, 0 none),
+    /// bits 3-0: the command.
+    int Flags;
+    /// The parameter of the command (two nibbles).
+    int Param;
+
+    int Command()
+    {
+        return Flags & 0xf;
+    }
+
+    int Arpeggio()
+    {
+        return (Flags >> 4) & 3;
+    }
+
+    bool NoSoundTranspose()
+    {
+        return (Flags & 0x80) != 0;
+    }
+
+    bool NoNoteTranspose()
+    {
+        return (Flags & 0x40) != 0;
+    }
+
+    bool IsEmpty()
+    {
+        return Value == 0 && Instrument == 0 && Flags == 0 && Param == 0;
+    }
+}
+
+/// One of the three arpeggio tables of an instrument.
+struct Arpeggio
+{
+    int Length;
+    int Repeat;
+    /// 14 signed note offsets.
+    uint8[] Data;
+}
+
+/// An instrument: 152 bytes in the file.
+struct Instrument
+{
+    /// 0 a sample, else a synth wave.
+    int SynthMode;
+    /// 0-based sample or synth wave.
+    int SampleWaveNo;
+    /// In words.
+    int Length;
+    /// In words; 1 means: played once.
+    int Repeat;
+    uint8[] Unknown8;
+    /// 0 to 64.
+    int Volume;
+    int FineTuning;
+    int Portamento;
+    /// 255: no vibrato.
+    int VibDelay;
+    int VibSpeed;
+    int VibLevel;
+    int AmfWave;
+    int AmfDelay;
+    int AmfLength;
+    int AmfRepeat;
+    int AdsrWave;
+    int AdsrDelay;
+    int AdsrLength;
+    int AdsrRepeat;
+    int SustainPt;
+    int SustainVal;
+    uint8[] Unknown16;
+    int Effect1;
+    /// See Effects.Names.
+    int Effect;
+    int Effect2;
+    int Effect3;
+    int EffectDelay;
+    Arpeggio[] Arpeggios;
+    /// 30 bytes, padded with zeros.
+    uint8[] Name;
+
+    bool IsSynth()
+    {
+        return SynthMode != 0;
+    }
+}
+
+/// A sample: 8-bit signed data. Length, repeat and name are only in the module format (SOAR).
+struct Sample
+{
+    uint8[] Data;
+    /// In words.
+    int Length;
+    /// In words.
+    int Repeat;
+    /// 30 bytes.
+    uint8[] Name;
+}
+
+/// A whole module.
+struct Module
+{
+    /// True when it was read from the packed format (with or without a replayer before it).
+    bool Packed;
+    /// The 4 characters after "SOAR", "V1.0" for a packed file.
+    string Version;
+    /// The owner (author) at the end of a packed file.
+    string Owner;
+    List<SongInfo> Songs;
+    /// 4 voices per position.
+    List<Voice> Voices;
+    List<Note> Notes;
+    List<Instrument> Instruments;
+    /// Synth waves, 128 bytes each.
+    List<uint8[]> Waves;
+    /// ADSR waves (volumes 0 to 64), 128 bytes each.
+    List<uint8[]> AdsrWaves;
+    /// AMF waves, 128 bytes each.
+    List<uint8[]> AmfWaves;
+    List<Sample> Samples;
+    /// True when the samples have lengths, repeats and names (the module format).
+    bool SampleInfo;
+    /// The editor state (EDAT, 20 bytes), empty when the file has none.
+    uint8[] EditData;
+
+    /// The number of positions in the over table.
+    int Positions()
+    {
+        return Voices.Count() / 4;
+    }
+
+    /// The voice of a position (0 to 3).
+    Voice VoiceAt(int position, int voice)
+    {
+        return Voices[position * 4 + voice];
+    }
+
+    /// A note of the note table, or an empty one past its end.
+    Note NoteAt(int address)
+    {
+        if (address < 0 || address >= Notes.Count())
+            return new Note();
+        return Notes[address];
+    }
+
+    /// A new, empty module: one song of one position with an empty pattern of 64 rows.
+    static Module Create()
+    {
+        var module = Module { Version = "V1.0", Owner = "", Songs = List<SongInfo>.Create(), Voices = List<Voice>.Create(),
+                              Notes = List<Note>.Create(), Instruments = List<Instrument>.Create(),
+                              Waves = List<uint8[]>.Create(), AdsrWaves = List<uint8[]>.Create(),
+                              AmfWaves = List<uint8[]>.Create(), Samples = List<Sample>.Create(), SampleInfo = true,
+                              EditData = new uint8[0] };
+        module.Songs.Add(SongInfo { Speed = 6, PatternLength = 64, StartPos = 0, StopPos = 0, RepeatPos = 0, TicksPerSecond = 50 });
+        for (var v = 0; v < 4; v += 1)
+            module.Voices.Add(Voice { NoteAddress = 0 });
+        for (var i = 0; i < 64; i += 1)
+            module.Notes.Add(new());
+        return module;
+    }
+}
+
+/// Text from bytes: up to the first zero, other bytes than printable ASCII as '?'.
+string TextOf(uint8[] bytes)
+{
+    var sb = StringBuilder.Create();
+    foreach (var b in bytes)
+    {
+        if (b == 0)
+            break;
+        sb.Append(b >= 32 && b < 127 ? (char)b : '?');
+    }
+    return sb.ToString();
+}
+
+/// A name of a fixed number of bytes, padded with zeros.
+uint8[] NameBytes(StringSlice text, int size)
+{
+    var bytes = new uint8[size];
+    for (var i = 0; i < size && i < text.Length; i += 1)
+        bytes[i] = (uint8)text[i];
+    return bytes;
+}

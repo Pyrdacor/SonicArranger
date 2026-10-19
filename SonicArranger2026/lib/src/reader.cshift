@@ -1,0 +1,329 @@
+//! Reading modules: the module format of Sonic Arranger ("SOAR" with tagged sections) and the packed format of its
+//! export (a header of section offsets, often after a replayer in 68000 code). All values are big-endian.
+
+namespace SonicArranger;
+
+using System;
+
+error ModuleError
+{
+    /// The data is neither a module nor a packed file.
+    NotSonicArranger,
+    /// The data ends inside a section.
+    Truncated,
+    /// A section has an unknown tag or wrong sizes.
+    Invalid
+}
+
+/// Reads big-endian values from bytes; reading past the end sets Failed and gives zeros.
+struct ByteReader
+{
+    uint8[] Data;
+    int Pos;
+    bool Failed;
+
+    bool Has(int count)
+    {
+        return count >= 0 && Pos + count <= Data.Length;
+    }
+
+    int U8()
+    {
+        if (!Has(1))
+        {
+            Failed = true;
+            return 0;
+        }
+        Pos += 1;
+        return Data[Pos - 1];
+    }
+
+    int S8()
+    {
+        int v = U8();
+        return v >= 128 ? v - 256 : v;
+    }
+
+    int U16()
+    {
+        int hi = U8();
+        return hi * 256 + U8();
+    }
+
+    int S16()
+    {
+        int v = U16();
+        return v >= 32768 ? v - 65536 : v;
+    }
+
+    int S32()
+    {
+        int a = U16();
+        int b = U16();
+        return (a << 16) | b;
+    }
+
+    uint8[] Bytes(int count)
+    {
+        if (!Has(count))
+        {
+            Failed = true;
+            Pos = Data.Length;
+            return new uint8[Math.Max(0, count)];
+        }
+        var bytes = new uint8[count];
+        for (var i = 0; i < count; i += 1)
+            bytes[i] = Data[Pos + i];
+        Pos += count;
+        return bytes;
+    }
+
+    string Tag()
+    {
+        var sb = StringBuilder.Create();
+        for (var i = 0; i < 4; i += 1)
+            sb.Append((char)U8());
+        return sb.ToString();
+    }
+}
+
+SongInfo ReadSong(ref ByteReader r)
+{
+    return SongInfo { Speed = r.S16(), PatternLength = r.S16(), StartPos = r.S16(), StopPos = r.S16(),
+                      RepeatPos = r.S16(), TicksPerSecond = r.S16() };
+}
+
+Voice ReadVoice(ref ByteReader r)
+{
+    return Voice { NoteAddress = r.S16(), SoundTranspose = r.S8(), NoteTranspose = r.S8() };
+}
+
+Note ReadNote(ref ByteReader r)
+{
+    return Note { Value = r.U8(), Instrument = r.U8(), Flags = r.U8(), Param = r.U8() };
+}
+
+Instrument ReadInstrument(ref ByteReader r)
+{
+    var inst = Instrument { SynthMode = r.S16(), SampleWaveNo = r.S16(), Length = r.S16(), Repeat = r.S16(),
+                            Unknown8 = r.Bytes(8), Volume = r.S16(), FineTuning = r.S16(), Portamento = r.S16(),
+                            VibDelay = r.S16(), VibSpeed = r.S16(), VibLevel = r.S16(), AmfWave = r.S16(),
+                            AmfDelay = r.S16(), AmfLength = r.S16(), AmfRepeat = r.S16(), AdsrWave = r.S16(),
+                            AdsrDelay = r.S16(), AdsrLength = r.S16(), AdsrRepeat = r.S16(), SustainPt = r.S16(),
+                            SustainVal = r.S16(), Unknown16 = r.Bytes(16), Effect1 = r.S16(), Effect = r.S16(),
+                            Effect2 = r.S16(), Effect3 = r.S16(), EffectDelay = r.S16() };
+    inst.Arpeggios = new Arpeggio[3];
+    for (var i = 0; i < 3; i += 1)
+        inst.Arpeggios[i] = Arpeggio { Length = r.U8(), Repeat = r.U8(), Data = r.Bytes(14) };
+    inst.Name = r.Bytes(30);
+    return inst;
+}
+
+/// Reads a module from the bytes of a file.
+ModuleError<Module> ReadModule(uint8[] data)
+{
+    var r = ByteReader { Data = data };
+    if (data.Length < 8)
+        return error(ModuleError.NotSonicArranger);
+    if (r.Tag() == "SOAR")
+        return ReadSoar(ref r);
+    return ReadPacked(data);
+}
+
+/// Reads a module file.
+Error<Module> LoadModule(StringSlice path)
+{
+    var data = try File.ReadAllBytes(path);
+    if (ReadModule(data) is Module module)
+        return module;
+    return error(path.ToString() + " is no Sonic Arranger file (or a damaged one)");
+}
+
+ModuleError<Module> ReadSoar(ref ByteReader r)
+{
+    var m = Module.Create();
+    m.Songs.Clear();
+    m.Voices.Clear();
+    m.Notes.Clear();
+    m.Version = r.Tag();
+    while (r.Pos < r.Data.Length)
+    {
+        string tag = r.Tag();
+        if (r.Failed)
+            return error(ModuleError.Truncated);
+        if (tag == "STBL")
+        {
+            int count = r.S32();
+            for (var i = 0; i < count && !r.Failed; i += 1)
+                m.Songs.Add(ReadSong(ref r));
+        }
+        else if (tag == "OVTB")
+        {
+            int count = r.S32();
+            for (var i = 0; i < count * 4 && !r.Failed; i += 1)
+                m.Voices.Add(ReadVoice(ref r));
+        }
+        else if (tag == "NTBL")
+        {
+            int count = r.S32();
+            for (var i = 0; i < count && !r.Failed; i += 1)
+                m.Notes.Add(ReadNote(ref r));
+        }
+        else if (tag == "INST")
+        {
+            int count = r.S32();
+            for (var i = 0; i < count && !r.Failed; i += 1)
+                m.Instruments.Add(ReadInstrument(ref r));
+        }
+        else if (tag == "SD8B")
+        {
+            int count = r.S32();
+            if (count < 0 || !r.Has(count * 42))
+                return error(ModuleError.Truncated);
+            var samples = new Sample[count];
+            for (var i = 0; i < count; i += 1)
+                samples[i].Length = r.S32();
+            for (var i = 0; i < count; i += 1)
+                samples[i].Repeat = r.S32();
+            for (var i = 0; i < count; i += 1)
+                samples[i].Name = r.Bytes(30);
+            var sizes = new int[count];
+            for (var i = 0; i < count; i += 1)
+                sizes[i] = r.S32();
+            for (var i = 0; i < count; i += 1)
+            {
+                samples[i].Data = r.Bytes(sizes[i]);
+                m.Samples.Add(samples[i]);
+            }
+        }
+        else if (tag == "SYWT" || tag == "SYAR" || tag == "SYAF")
+        {
+            int count = r.S32();
+            for (var i = 0; i < count && !r.Failed; i += 1)
+            {
+                var wave = r.Bytes(128);
+                if (tag == "SYWT")
+                    m.Waves.Add(wave);
+                else if (tag == "SYAR")
+                    m.AdsrWaves.Add(wave);
+                else
+                    m.AmfWaves.Add(wave);
+            }
+        }
+        else if (tag == "EDAT")
+            m.EditData = r.Bytes(20);
+        else
+            return error(ModuleError.Invalid);
+        if (r.Failed)
+            return error(ModuleError.Truncated);
+    }
+    if (m.Songs.Count() == 0)
+        return error(ModuleError.Invalid);
+    return m;
+}
+
+/// The start of the packed data: the first offset (the songs, always 0x28), searched for after a replayer.
+int FindPackedStart(uint8[] data)
+{
+    for (var i = 0; i + 4 <= data.Length; i += 1)
+    {
+        if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 0x28)
+            return i;
+    }
+    return -1;
+}
+
+/// The bytes up to the first zero, the rest zeros; bytes above 127 become '?' (as SonicConvert reads them as ASCII).
+uint8[] CutAtZero(uint8[] bytes)
+{
+    var cut = new uint8[bytes.Length];
+    for (var i = 0; i < bytes.Length && bytes[i] != 0; i += 1)
+        cut[i] = bytes[i] < 128 ? bytes[i] : (uint8)'?';
+    return cut;
+}
+
+ModuleError<Module> ReadPacked(uint8[] data)
+{
+    int start = FindPackedStart(data);
+    if (start < 0)
+        return error(ModuleError.NotSonicArranger);
+    var r = ByteReader { Data = data, Pos = start + 4 };
+    int[] offsets = new int[8];
+    offsets[0] = 0x28;
+    for (var i = 1; i < 8; i += 1)
+        offsets[i] = r.S32();
+    r.U16(); // unknown (0x2144, 0x2154, ...)
+    if (r.U16() != 0xffff)
+        return error(ModuleError.NotSonicArranger);
+    for (var i = 1; i < 8; i += 1)
+    {
+        if (offsets[i] < offsets[i - 1] || start + offsets[i] > data.Length)
+            return error(ModuleError.Invalid);
+    }
+    var m = Module.Create();
+    m.Packed = true;
+    m.SampleInfo = false;
+    m.Songs.Clear();
+    m.Voices.Clear();
+    m.Notes.Clear();
+    r.Pos = start + offsets[0];
+    for (var i = 0; i < (offsets[1] - offsets[0]) / 12; i += 1)
+        m.Songs.Add(ReadSong(ref r));
+    r.Pos = start + offsets[1];
+    for (var i = 0; i < (offsets[2] - offsets[1]) / 4; i += 1)
+        m.Voices.Add(ReadVoice(ref r));
+    r.Pos = start + offsets[2];
+    for (var i = 0; i < (offsets[3] - offsets[2]) / 4; i += 1)
+        m.Notes.Add(ReadNote(ref r));
+    r.Pos = start + offsets[3];
+    for (var i = 0; i < (offsets[4] - offsets[3]) / 152; i += 1)
+    {
+        // the names of a packed file have left-overs after their end: they become zeros (as in SonicConvert)
+        var inst = ReadInstrument(ref r);
+        inst.Name = CutAtZero(inst.Name);
+        m.Instruments.Add(inst);
+    }
+    r.Pos = start + offsets[4];
+    for (var i = 0; i < (offsets[5] - offsets[4]) / 128; i += 1)
+        m.Waves.Add(r.Bytes(128));
+    r.Pos = start + offsets[5];
+    for (var i = 0; i < (offsets[6] - offsets[5]) / 128; i += 1)
+        m.AdsrWaves.Add(r.Bytes(128));
+    r.Pos = start + offsets[6];
+    for (var i = 0; i < (offsets[7] - offsets[6]) / 128; i += 1)
+        m.AmfWaves.Add(r.Bytes(128));
+    r.Pos = start + offsets[7];
+    int count = r.S32();
+    if (count < 0 || !r.Has(count * 4))
+        return error(ModuleError.Truncated);
+    var sizes = new int[count];
+    for (var i = 0; i < count; i += 1)
+        sizes[i] = r.S32();
+    for (var i = 0; i < count; i += 1)
+    {
+        var data8 = r.Bytes(sizes[i]);
+        m.Samples.Add(Sample { Data = data8, Length = data8.Length / 2, Repeat = 1, Name = new uint8[0] });
+    }
+    if (r.Failed)
+        return error(ModuleError.Truncated);
+    // the owner: "deadbeef", a zero long word, then the name with each byte inverted, ended by a zero byte
+    if (r.Tag() == "dead" && r.Tag() == "beef" && r.S32() == 0 && !r.Failed)
+    {
+        var sb = StringBuilder.Create();
+        bool name = true;
+        while (r.Pos < data.Length)
+        {
+            int b = r.U8();
+            if (b == 0)
+                break;
+            if ((b & 0x80) == 0)
+                name = false;
+            if (name)
+                sb.Append((char)(~b & 0x7f));
+        }
+        m.Owner = sb.ToString();
+    }
+    if (m.Songs.Count() == 0)
+        return error(ModuleError.Invalid);
+    return m;
+}

@@ -1,0 +1,6 @@
+{
+	"name": "sonicarranger",
+	"version": "0.1.0",
+	"type": "library",
+	"sources": ["src"]
+}

@@ -27,7 +27,8 @@ namespace SonicConvert
             Console.WriteLine(" -r<n>: Set output sample rate in Hz to n (default: 44100)");
             Console.WriteLine(" -s: Stereo \"LRRL\" (default: mono)");
             Console.WriteLine(" -q: 4 Channel Output (default: mono)");
-            Console.WriteLine(" -d: Disable low pass filter (default: active)");
+            Console.WriteLine(" -d: Disable the low pass filter that the power LED switches (default: emulated)");
+            Console.WriteLine(" -i: Interpolate the samples (smoother; the Amiga holds each byte)");
             Console.WriteLine(" -t<n>: Track/song index (default: 0)");
             Console.WriteLine(" -l<n>: Num track loops (default: 0 -> play once)");
             Console.WriteLine();
@@ -114,6 +115,7 @@ namespace SonicConvert
             bool pal = true;
             SonicArranger.Stream.ChannelMode channelMode = SonicArranger.Stream.ChannelMode.Mono;
             bool enableLPF = true;
+            bool interpolate = false;
             int song = 0;
             int numLoops = 0;
 
@@ -156,6 +158,9 @@ namespace SonicConvert
                             break;
                         case 'd':
                             enableLPF = false;
+                            break;
+                        case 'i':
+                            interpolate = true;
                             break;
                         case 't':
                         {
@@ -271,7 +276,7 @@ namespace SonicConvert
 
             try
             {
-                saStream = new SonicArranger.Stream(saFile, song, (uint)sampleRate, channelMode, enableLPF, pal);
+                saStream = new SonicArranger.Stream(saFile, song, (uint)sampleRate, channelMode, enableLPF, pal, interpolate);
             }
             catch
             {

@@ -228,6 +228,12 @@ namespace SonicArranger
 
 		public string Name { get; private set; }
 
+		/// <summary>
+		/// The vibrato delay as stored in the file. The replayer only
+		/// treats a low byte of 0xff as "no vibrato".
+		/// </summary>
+		internal short RawVibDelay { get; private set; }
+
 		internal Instrument(ICustomReader reader) : this()
 		{
 			SynthMode = reader.ReadBEInt16() != 0;
@@ -239,6 +245,7 @@ namespace SonicArranger
 			FineTuning = reader.ReadBEInt16();
 			Portamento = reader.ReadBEInt16();
 			VibDelay = reader.ReadBEInt16();
+			RawVibDelay = VibDelay;
 			if (VibDelay >= 255)
 				VibDelay = -1;
 			VibSpeed = reader.ReadBEInt16();

@@ -31,6 +31,7 @@ The standalone versions should work without .NET installed but are larger in siz
 
 #### Changlog
 
+- 1.11: The replayer follows the Amiga replay routine of Sonic Arranger (SONIC_ARRANGER.S of Ambermoon): Paula emulation (the bytes are held for their period, period changes keep the position, latched sample loops), vibrato after its delay in every tick, the lowest period 113, master volume 63, the LED filter off at the start (and a working filter), the note commands 2, 4, 5, 6, 9, A, B and F, sustain with note 0x80, the effects as in the original (also Metamorph and Oscillator), the same noise on each run, stereo and 4 channel output work again; option -i interpolates the samples
 - 1.10: When converting back to module files (SOAR), the sample names are taken from the instruments which use that sample
 - 1.9: Added possibility to save back to module format, fixed module format loading, add convert to module option in SonicConvert
 - 1.8: Fixed stream reset

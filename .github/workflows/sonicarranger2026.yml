@@ -1,5 +1,6 @@
 # SonicArranger2026: builds the tracker (Linux and the browser page) and runs its tests with the songs of Ambermoon,
-# including the check that SonicConvert converts the modules saved by SonicArranger2026 to the same WAV.
+# including the check that SonicConvert converts the modules saved by SonicArranger2026 to the same WAV, and drives the
+# browser page with Playwright (entering notes, undo, saving).
 name: SonicArranger2026
 
 on:
@@ -16,6 +17,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Install cshiftc
         run: |
           curl -sSfL -o cshift.tar.xz "https://github.com/Robert-Schneckenhaus/CShift/releases/download/v$CSHIFT_VERSION/cshift-$CSHIFT_VERSION-linux-x64.tar.xz"
@@ -32,3 +36,9 @@ jobs:
           "$CSHIFTC" publish SonicArranger2026
       - name: Tests
         run: SonicArranger2026/tests/run.sh "$RUNNER_TEMP/ambermoon/Music"
+      - name: The tracker in a browser
+        run: |
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+          node SonicArranger2026/tests/ui-check.mjs SonicArranger2026/bin/sonicarranger2026.html saved.sa
+          DOTNET_ROLL_FORWARD=Major dotnet "$(find SonicConvert/bin/Release -name SonicConvert.dll | head -1)" saved.sa saved.wav

@@ -1,6 +1,7 @@
-// The tests of the module library: a module made in code is saved and read back unchanged; every file given is read,
-// saved in the module format and read back; a module file must come out byte for byte the same, a packed file is
-// saved into the folder given with --out (for tests/run.sh, which converts both with SonicConvert and compares).
+// The tests of the module library: a module made in code is saved and read back unchanged; changing notes, positions
+// and patterns, and undo; every file given is read, saved in the module format and read back; a module file must come
+// out byte for byte the same. With --out, each file is saved into that folder in the module format (name.soar) and
+// with a note changed (name.edited), for tests/run.sh, which converts them with SonicConvert and compares.
 //
 //   sa2026-tests [--out folder] [files...]
 
@@ -72,6 +73,87 @@ void TestMadeInCode()
     Check(ReadModule(new uint8[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }) is error, "data without Sonic Arranger is an error");
 }
 
+// changing notes, positions and patterns, and undo
+void TestEditing()
+{
+    var note = new Note();
+    note = WithDigit(note, 3, 0xa);
+    note = WithDigit(note, 4, 0xc);
+    note = WithDigit(note, 5, 0x3);
+    note = WithDigit(note, 6, 0xf);
+    Check(note.Flags == 0xac && note.Param == 0x3f, "the 4 hex digits of the note options");
+    note = WithDigit(note, 1, 1);
+    note = WithDigit(note, 2, 7);
+    Check(note.Instrument == 17, "the two digits of the instrument");
+    Check(WithDigit(note, 2, 12).Instrument == 17, "an instrument digit is 0 to 9");
+    var cleared = Cleared(note, 5);
+    Check(cleared.Flags == 0xa0 && cleared.Param == 0 && cleared.Instrument == 17, "clearing the command keeps the flags");
+    note.Value = 40;
+    cleared = Cleared(note, NoteColumn);
+    Check(cleared.Value == 0 && cleared.Instrument == 0 && cleared.Param == 0x3f, "clearing the note and instrument");
+    Check(PianoKey(0, 3) == 37 && PianoKey(12, 3) == 49 && PianoKey(-1, 3) == -1 && PianoKey(11, 8) == 108 &&
+          PianoKey(12, 8) == -1, "piano keys");
+    Check(NoteName(PianoKey(9, 2)) == "A-2", "A of octave 2");
+
+    // positions: the song after the insert point moves, a song ending at it gets longer
+    var m = Module.Create();
+    m.Songs[0] = SongInfo { Speed = 6, PatternLength = 64, StartPos = 0, StopPos = 0, RepeatPos = 0, TicksPerSecond = 50 };
+    m.Songs.Add(SongInfo { Speed = 6, PatternLength = 64, StartPos = 1, StopPos = 1, RepeatPos = 1, TicksPerSecond = 50 });
+    InsertPosition(ref m, 0);
+    Check(m.Positions() == 2 && m.Songs[0].StopPos == 1 && m.Songs[1].StartPos == 2 && m.Songs[1].StopPos == 2,
+          "inserting a position after the end of song 1");
+    m.Voices[4] = Voice { NoteAddress = 5, SoundTranspose = 1, NoteTranspose = -1 };
+    RemovePosition(ref m, 0);
+    Check(m.Positions() == 1 && m.VoiceAt(0, 0).NoteAddress == 5 && m.Songs[0].StopPos == 0 && m.Songs[1].StartPos == 0,
+          "removing a position");
+    RemovePosition(ref m, 0);
+    Check(m.Positions() == 1, "the last position stays");
+
+    // patterns: a new one at the end of the note table, a copy keeps the notes
+    m.Notes[3] = Note { Value = 50, Instrument = 2 };
+    int fresh = NewPattern(ref m, 64);
+    int copy = CopyPattern(ref m, 0, 64);
+    Check(fresh == 256 && copy == 320 && m.Notes.Count() == 384 && m.Notes[323].Value == 50 && m.Notes[259].Value == 0,
+          "new and copied patterns");
+    Check(Module.Create().VoiceAt(0, 3).NoteAddress == 192, "a new module has a pattern for each voice");
+
+    // undo and redo; changes of one kind in a row are one step
+    var h = History.Create();
+    h.Before(m, "Note", "");
+    SetNote(ref m, 0, Note { Value = 1 });
+    h.Before(m, "Speed", "speed");
+    var song = m.Songs[0];
+    song.Speed = 3;
+    m.Songs[0] = song;
+    h.Before(m, "Speed", "speed");
+    song.Speed = 4;
+    m.Songs[0] = song;
+    Check(h.Undo.Count() == 2, "changes of one box in a row are one step");
+    h.UndoOnce(ref m);
+    Check(m.Songs[0].Speed == 6 && m.Notes[0].Value == 1, "undo of the speed");
+    h.UndoOnce(ref m);
+    Check(m.Notes[0].Value == 0, "undo of the note");
+    h.RedoOnce(ref m);
+    h.RedoOnce(ref m);
+    Check(m.Notes[0].Value == 1 && m.Songs[0].Speed == 4 && !h.CanRedo(), "redo");
+    h.Before(m, "Note", "");
+    Check(!h.CanRedo(), "a change clears redo");
+}
+
+// the module with a note changed at the start of its first song (voice 1, row 0): to check that an edited module
+// still converts
+Module Edited(Module m)
+{
+    var copy = m;
+    copy.Notes = m.Notes.Select(n => n);
+    int address = m.VoiceAt(Math.Max(0, Math.Min(m.Songs[0].StartPos, m.Positions() - 1)), 0).NoteAddress;
+    var note = m.NoteAt(address);
+    note.Value = note.Value == 37 ? 49 : 37;
+    note.Instrument = m.Instruments.Count() > 0 ? 1 : 0;
+    SetNote(ref copy, address, note);
+    return copy;
+}
+
 void TestFile(StringSlice path, StringSlice outDir)
 {
     var read = File.ReadAllBytes(path);
@@ -99,12 +181,16 @@ void TestFile(StringSlice path, StringSlice outDir)
     {
         if (File.WriteAllBytes(Path.Combine(outDir, Path.GetFileName(path).ToString() + ".soar"), saved) is error e)
             Check(false, "cannot write into " + outDir);
+        var edited = Edited(m);
+        if (File.WriteAllBytes(Path.Combine(outDir, Path.GetFileName(path).ToString() + ".edited"), WriteSoar(edited)) is error e2)
+            Check(false, "cannot write into " + outDir);
     }
 }
 
 int Main(string[] args)
 {
     TestMadeInCode();
+    TestEditing();
     string outDir = "";
     for (var i = 0; i < args.Length; i += 1)
     {

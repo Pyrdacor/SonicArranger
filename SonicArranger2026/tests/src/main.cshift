@@ -174,6 +174,25 @@ void TestPlayer()
     var wav = WavFile(samples, 8000, 1);
     Check(TextOf(wav[0..4].ToArray()) == "RIFF" && wav.Length == samples.Length + 44 && wav[44] == (uint8)((samples[0] + 128) & 0xff),
           "a WAV file");
+    // CreateAt with the start position of the song plays the same; the rows are 6 ticks at 50 Hz: 960 frames each
+    if (Player.CreateAt(m, 0, 0, 8000, ChannelMode.Mono, false, true, false) is Player at)
+    {
+        Check(SameBytes(at.ReadAll(0), samples), "CreateAt at the start position: the same samples");
+        var timed = at;
+        if (Player.CreateAt(m, 0, 0, 8000, ChannelMode.Mono, false, true, false) is Player fresh)
+            timed = fresh;
+        timed.Read(false);
+        var first = timed.RowAt(10);
+        var fourth = timed.RowAt(3 * 960 + 480);
+        var ninth = timed.RowAt(7999);
+        Check(first.Position == 0 && first.Row == 0, $"the row at the start: {first.Position}:{first.Row}");
+        Check(fourth.Row == 3 && fourth.Frame >= 3 * 960 - 2 && fourth.Frame <= 3 * 960 + 2,
+              $"the 4th row starts at frame 2880: {fourth.Row} at {fourth.Frame}");
+        Check(ninth.Row == 8, $"the row at the end of the first second: {ninth.Row}");
+    }
+    else
+        Check(false, "a player that starts at a position");
+    Check(Player.CreateAt(m, 0, 5, 8000, ChannelMode.Mono, false, true, false) is Player, "a position past the end is clamped");
     Check(Player.Create(m, 1, 8000, ChannelMode.Mono, false, true, false) is error, "there is no second song");
     if (Player.Create(m, 0, 8000, ChannelMode.Stereo, true, true, false) is Player stereo)
         Check(stereo.ReadAll(0).Length % 2 == 0, "stereo: whole samples of 2 channels");

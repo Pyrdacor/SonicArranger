@@ -226,6 +226,14 @@ struct PlayVoice
     }
 }
 
+/// A row that the player started: at which frame of its output (a frame is one sample of each channel).
+struct PlayedRow
+{
+    int64 Frame;
+    int Position;
+    int Row;
+}
+
 /// Plays a song of a module.
 struct Player
 {
@@ -261,6 +269,7 @@ struct Player
     int EndIndex;
     int Processed;
     int LoopCounter;
+    List<PlayedRow> Rows;    // the rows started in the samples made so far and not yet asked for (RowAt)
     // the low pass filters (one per output channel)
     double B0;
     double B1;
@@ -279,6 +288,16 @@ struct Player
     {
         if (song < 0 || song >= m.Songs.Count())
             return error($"there is no song {song + 1}");
+        return CreateAt(m, song, m.Songs[song].StartPos, sampleRate, mode, lowPassFilter, pal, interpolate);
+    }
+
+    /// A player for a song that starts at `position` instead of the start position of the song (and plays on to its
+    /// stop position, then from its repeat position).
+    static Error<Player> CreateAt(Module m, int song, int position, int sampleRate, ChannelMode mode,
+                                  bool lowPassFilter, bool pal, bool interpolate)
+    {
+        if (song < 0 || song >= m.Songs.Count())
+            return error($"there is no song {song + 1}");
         if (sampleRate < 2000 || sampleRate > 200000)
             return error("the sample rate must be 2000 to 200000 Hz");
         var info = m.Songs[song];
@@ -294,7 +313,7 @@ struct Player
                          Clock = pal ? PalClock : NtscClock, AllowLowPassFilter = lowPassFilter,
                          Interpolate = interpolate, MasterVolume = 63, Buffer = new uint8[2 * sampleRate * channels],
                          InterruptDelay = 1.0 / info.TicksPerSecond, X1 = new double[4], X2 = new double[4],
-                         Y1 = new double[4], Y2 = new double[4] };
+                         Y1 = new double[4], Y2 = new double[4], Rows = List<PlayedRow>.Create() };
         // the LED filter: a second order Butterworth filter at 3275 Hz (bilinear transform with prewarping)
         double k = Math.Tan(Math.PI * 3275.0 / sampleRate);
         double k2 = k * k;
@@ -307,7 +326,7 @@ struct Player
         // as SA_LoadSong: the first interrupt starts the start position
         p.Speed = info.Speed;
         p.PatternLength = info.PatternLength;
-        p.OverLinePos = info.StartPos - 1;
+        p.OverLinePos = position - 1;
         p.SongSpeedPos = info.Speed;
         p.OverPatternPos = info.PatternLength;
         p.CurrentPosition = -1;
@@ -316,6 +335,17 @@ struct Player
             p.Voices[v] = PlayVoice { SynthWave = new uint8[128], Flags = 1 };
         p.Load(0, sampleRate * 2, false);
         return p;
+    }
+
+    /// The row being played at `frame` of the output (the frames read so far, minus what is still in the buffer of the
+    /// sound output). The rows before it are forgotten, so `frame` must not go back.
+    PlayedRow RowAt(int64 frame)
+    {
+        while (Rows.Count() > 1 && Rows.Get(1).Frame <= frame)
+            Rows.RemoveAt(0);
+        if (Rows.Count() == 0)
+            return PlayedRow { Frame = 0, Position = Math.Max(0, CurrentPosition), Row = 0 };
+        return Rows.Get(0);
     }
 
     /// True when the song has been played to its end.
@@ -1059,6 +1089,8 @@ struct Player
             SongSpeedPos = 0;
             if (!AdvanceSong(bufferIndex, loop))
                 return;
+            Rows.Add(PlayedRow { Frame = (int64)((Processed + bufferIndex) / Channels), Position = CurrentPosition,
+                                 Row = OverPatternPos });
             for (var v = 0; v < 4; v += 1)
             {
                 var voice = M.Voices[CurrentPosition * 4 + v];

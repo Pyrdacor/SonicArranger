@@ -1,7 +1,7 @@
 // SonicArranger2026: a tracker for Sonic Arranger modules, in the spirit of the Amiga original. It opens modules (the
 // module format "SOAR" and the packed format of the export, also with a replayer before it), shows and edits their
-// songs, the over table (the positions with the pattern and transposes of each voice) and the patterns, and saves them
-// in the module format.
+// songs, the over table (the positions with the pattern and transposes of each voice) and the patterns, plays them
+// (src/play.cshift), and saves them in the module format.
 //
 //   sonicarranger2026 [file]               the tracker, with a file
 //   sonicarranger2026 --convert in out     saves a file in the module format, without a window
@@ -37,11 +37,13 @@ struct App
     int Discard;          // asks before the changes are lost: 0 no, 1 for New, 2 for Open, 3 for Quit
     bool Dark;
     bool Quit;
+    Playback Play;        // the song playing (src/play.cshift)
 }
 
 // a module to work on: everything that belonged to the last one is reset
 void SetModule(ref App app, Module m, string path)
 {
+    StopPlaying(ref app);
     app.Song = m;
     app.History = History.Create();
     app.Modified = false;
@@ -190,6 +192,18 @@ void Draw(Ui ui, ref App app)
             if (ui.MenuItem("Copy of the pattern for the voice", "Ctrl+D"))
                 NewPatternHere(ref app, true);
         }
+        using (ui.Menu("Play"))
+        {
+            if (ui.MenuItem(app.Play.Playing ? "Stop" : "Play the song", "F9"))
+                TogglePlaying(ref app, true);
+            if (ui.MenuItem("Play from this position", "F10"))
+            {
+                StopPlaying(ref app);
+                StartPlaying(ref app, false);
+            }
+            if (ui.MenuItem(app.Play.Follow ? "Do not follow the song" : "Follow the song"))
+                app.Play.Follow = !app.Play.Follow;
+        }
         using (ui.Menu("View"))
         {
             if (ui.MenuItem(app.Dark ? "Light theme" : "Dark theme"))
@@ -209,9 +223,14 @@ void Draw(Ui ui, ref App app)
             StartExport(ref app);
         if (input.Pressed(Key.Q, KeyModifiers.Ctrl))
             Ask(ref app, 3);
+        if (input.Pressed(Key.F9))
+            TogglePlaying(ref app, true);
+        if (input.Pressed(Key.F10))
+            TogglePlaying(ref app, false);
     }
     if (input.CloseRequested)
         Ask(ref app, 3);
+    UpdatePlayback(ui, ref app);
 
     SongHeader(ui, ref app);
     using (ui.Row())
@@ -353,6 +372,7 @@ int Main(string[] args)
     var ui = Ui.Create();
     ui.SetTheme(Theme.Dark());
     var app = App { Message = "", FilePath = "", Dark = true, Octave = 2, Step = 1 };
+    app.Play.Follow = true;
     SetModule(ref app, Module.Create(), "");
     if (file.Length > 0)
         Open(ref app, file);
@@ -369,6 +389,7 @@ int Main(string[] args)
         if (frames > 0 && count >= frames)
             break;
     }
+    ClosePlayback(ref app);
     window.Dispose();
     return 0;
 }

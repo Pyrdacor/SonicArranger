@@ -23,6 +23,7 @@ struct PatternColors
     Color Line;
     Color Column;        // the column of the cursor
     Color EditColumn;    // the same in edit mode
+    Color Playing;       // the row being heard
 
     static PatternColors Dark()
     {
@@ -32,7 +33,7 @@ struct PatternColors
                                Instrument = Color.FromRgb(120, 200, 255), Command = Color.FromRgb(255, 190, 110),
                                Empty = Color.FromRgb(70, 76, 92), Header = Color.FromRgb(36, 40, 54),
                                Line = Color.FromRgb(50, 55, 72), Column = Color.FromRgb(96, 130, 210),
-                               EditColumn = Color.FromRgb(200, 70, 80) };
+                               EditColumn = Color.FromRgb(200, 70, 80), Playing = Color.FromRgb(34, 74, 52) };
     }
 
     static PatternColors Light()
@@ -43,7 +44,7 @@ struct PatternColors
                                Instrument = Color.FromRgb(20, 110, 190), Command = Color.FromRgb(180, 90, 0),
                                Empty = Color.FromRgb(190, 195, 205), Header = Color.FromRgb(225, 230, 240),
                                Line = Color.FromRgb(205, 210, 222), Column = Color.FromRgb(120, 160, 240),
-                               EditColumn = Color.FromRgb(235, 110, 120) };
+                               EditColumn = Color.FromRgb(235, 110, 120), Playing = Color.FromRgb(200, 238, 210) };
     }
 }
 
@@ -169,6 +170,8 @@ void PatternView(Ui ui, ref App app)
         int y = top + i * lh;
         if (row == app.Row)
             ui.FillRect(Rect.Create(r.X, y, r.Width, lh), colors.Cursor);
+        else if (app.Play.Playing && app.Play.Position == app.Position && row == app.Play.Row)
+            ui.FillRect(Rect.Create(r.X, y, r.Width, lh), colors.Playing);
         else if (row % 4 == 0)
             ui.FillRect(Rect.Create(r.X, y, r.Width, lh), colors.Beat);
         int ty = y + (lh - font.LineHeight()) / 2;

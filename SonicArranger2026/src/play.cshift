@@ -1,0 +1,126 @@
+// Playing in the tracker: the replayer (lib/src/player.cshift) makes the samples, in stereo at 44.1 kHz, and
+// System.Audio plays them. Each frame refills the buffer of the sound output and asks for the next frame in 20 ms; the
+// row being heard is the one the player started at the frame written minus what is still queued in the output, and
+// the pattern view follows it.
+
+using System;
+using System.Audio;
+using System.Ui;
+using SonicArranger;
+
+const int PlayRate = 44100;
+
+struct Playback
+{
+    bool Playing;
+    bool OutputOpen;
+    AudioOutput Output;
+    Player Player;
+    uint8[] Pending;      // samples read from the player and not written yet
+    int PendingAt;
+    int64 Written;        // frames written to the output since the start
+    int Position;         // the row being heard
+    int Row;
+    bool Follow;          // the pattern view shows the row being heard
+}
+
+// starts the song shown: from its start position, or from the position shown
+void StartPlaying(ref App app, bool fromStart)
+{
+    var song = app.Song.Songs[app.SongIndex];
+    int position = fromStart ? song.StartPos : app.Position;
+    position = Math.Max(0, Math.Min(position, app.Song.Positions() - 1));
+    if (Player.CreateAt(app.Song, app.SongIndex, position, PlayRate, ChannelMode.Stereo, true, true, false) is not Player player)
+    {
+        app.Message = "The song cannot be played (speed 1 to 16, 1 to 200 ticks per second)";
+        return;
+    }
+    if (!app.Play.OutputOpen)
+    {
+        switch (AudioOutput.Open(PlayRate, 2))
+        {
+        case AudioOutput output:
+            app.Play.Output = output;
+            app.Play.OutputOpen = true;
+            break;
+        case error e:
+            app.Message = "No sound: " + e.Message;
+            return;
+        }
+    }
+    else
+        app.Play.Output.Clear();
+    app.Play.Player = player;
+    app.Play.Pending = new uint8[0];
+    app.Play.PendingAt = 0;
+    app.Play.Written = 0;
+    app.Play.Position = position;
+    app.Play.Row = 0;
+    app.Play.Playing = true;
+    app.Message = fromStart ? "Playing the song" : $"Playing from position {Dec(position, 3)}";
+}
+
+void StopPlaying(ref App app)
+{
+    if (!app.Play.Playing)
+        return;
+    app.Play.Playing = false;
+    app.Play.Output.Clear();
+    app.Message = "Stopped";
+}
+
+// F9 and F10: start, or stop when it plays
+void TogglePlaying(ref App app, bool fromStart)
+{
+    if (app.Play.Playing)
+        StopPlaying(ref app);
+    else
+        StartPlaying(ref app, fromStart);
+}
+
+// once a frame: refills the sound output and follows the row being heard
+void UpdatePlayback(Ui ui, ref App app)
+{
+    if (!app.Play.Playing)
+        return;
+    // the player is copied out and back: its state changes while it reads
+    var player = app.Play.Player;
+    while (true)
+    {
+        int writable = app.Play.Output.Writable();
+        if (writable <= 0)
+            break;
+        if (app.Play.PendingAt >= app.Play.Pending.Length)
+        {
+            app.Play.Pending = player.Read(true);
+            app.Play.PendingAt = 0;
+            if (app.Play.Pending.Length == 0)
+                break;
+        }
+        int frames = Math.Min(writable, (app.Play.Pending.Length - app.Play.PendingAt) / 2);
+        int got = app.Play.Output.WriteSigned8(app.Play.Pending[app.Play.PendingAt..app.Play.PendingAt + frames * 2]);
+        app.Play.PendingAt += got * 2;
+        app.Play.Written += got;
+        if (got == 0)
+            break;
+    }
+    var row = player.RowAt(app.Play.Written - app.Play.Output.Queued());
+    app.Play.Player = player;
+    app.Play.Position = row.Position;
+    app.Play.Row = row.Row;
+    if (app.Play.Follow && !app.EditMode)
+    {
+        app.Position = row.Position;
+        app.Row = row.Row;
+    }
+    ui.RequestFrame(20);
+}
+
+// before the program ends
+void ClosePlayback(ref App app)
+{
+    if (app.Play.OutputOpen)
+        app.Play.Output.Close();
+    app.Play.OutputOpen = false;
+    app.Play.Playing = false;
+}

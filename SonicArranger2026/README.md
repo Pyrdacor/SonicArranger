@@ -12,12 +12,12 @@ This is the start; it grows step by step.
 | Show | the songs and their timing, the over table (pattern address, sound and note transpose of each voice per position), the instruments, the patterns |
 | Edit | notes, instruments and note options in the pattern (the keyboard as a piano), the values of the song, the voices of a position, inserting and removing positions, new patterns; undo and redo |
 | Save | in the module format; Sonic Arranger and SonicConvert load it |
-| Play | the replayer makes WAV files (File > Export WAV, Ctrl+E; `--wav`): the same samples as SonicConvert 1.11, which follows the Amiga replay routine |
-| Next | playing in the tracker (needs sound output in CShift), the instrument editor, waves and samples, saving in the packed format |
+| Play | in the tracker (F9 the song, F10 from the position shown; the pattern view follows the row being heard), on Windows, Linux and in the browser; and into WAV files (File > Export WAV, Ctrl+E; `--wav`). The same samples as SonicConvert 1.11, which follows the Amiga replay routine |
+| Next | the instrument editor, waves and samples, saving in the packed format |
 
 ## Build and run
 
-With [cshiftc](https://github.com/Robert-Schneckenhaus/CShift/releases) (0.37 or newer):
+With [cshiftc](https://github.com/Robert-Schneckenhaus/CShift/releases) (0.38 or newer):
 
 ```
 cshiftc build SonicArranger2026          # -> SonicArranger2026/bin/sonicarranger2026(.exe)
@@ -41,6 +41,8 @@ In the browser, File > Open uses the browser's file chooser and File > Save as g
 | Ctrl+I, Ctrl+Del | insert a position after this one (a copy), remove this position |
 | Ctrl+N, Ctrl+D | the voice gets a new empty pattern, or a copy of its pattern, at the end of the note table |
 | Ctrl+O, Ctrl+S, Ctrl+Q | open, save as, quit (asks first when there are changes) |
+| F9 | play the song from its start position, or stop |
+| F10 | play from the position shown, or stop |
 | Ctrl+E | export the song as WAV (mono, 44.1 kHz; in the browser a download) |
 
 In edit mode, on the note column the keyboard is a piano as in ProTracker: `Z S X D C V G B H N J M` is the octave
@@ -70,6 +72,14 @@ would stop with an exception (an index past a table, an instrument longer than i
 zeros.
 
 A song of two minutes takes about half a second (in the browser about three).
+
+The tracker plays with `System.Audio` of CShift (0.38 or newer): stereo (the voices 1 and 4 left, 2 and 3 right, as on
+the Amiga) at 44.1 kHz, through waveOut on Windows, ALSA on Linux (PulseAudio and PipeWire through their ALSA plugin)
+and Web Audio in the browser (`src/play.cshift`). Each frame refills the buffer of the sound output (a quarter of a
+second) and asks for the next frame in 20 ms. The player notes at which frame of its output each row starts
+(`Player.RowAt`), so the row being heard is the one at the frames written minus what the output still has queued:
+the pattern view and the over table follow it (Play > Follow the song), except in edit mode. Changes to the notes are
+heard after about two seconds, as far as the replayer has made the samples ahead.
 
 ## Layout
 

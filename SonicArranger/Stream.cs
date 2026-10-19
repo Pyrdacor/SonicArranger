@@ -21,15 +21,16 @@ namespace SonicArranger
         double playTime = 0.0; // in seconds
         double nextInterruptTime = 0.0;
         readonly double interruptDelay = 0.020; // 20 ms by default
-        int songSpeed = 6;
-        int patternIndex = 0;
-        int noteIndex = 0;
-        int divisionTick = 0;
+        readonly SongState songState = new SongState();
+        // the position being played (-1 before the first one)
+        int currentPosition = -1;
+        Random random;
         long? endOfStreamIndex = null;
         long processedAmount = 0;
         public int LoopCounter { get; private set; } = 0;
         readonly bool allowLowPassFilter = true;
         readonly bool pal = true;
+        readonly bool interpolate = false;
         readonly object loadMutex = new object();
         readonly object readMutex = new object();
         readonly object copyMutex = new object();
@@ -46,8 +47,10 @@ namespace SonicArranger
         /// <param name="stereo">If active the LRRL channel pattern is used</param>
         /// <param name="allowAmigaLowPassFilter">Allows the Amiga hardware LPF emulation</param>
         /// <param name="pal">If active the PAL frequency is used, otherwise the NTSC frequency is used.</param>
+        /// <param name="interpolate">If active the samples are interpolated linearly (smoother, but the Amiga holds
+        /// each byte for its whole period).</param>
         public Stream(SonicArrangerFile sonicArrangerFile, int song, uint sampleRate, ChannelMode channelMode,
-            bool allowAmigaLowPassFilter = true, bool pal = true)
+            bool allowAmigaLowPassFilter = true, bool pal = true, bool interpolate = false)
         {
             if (sonicArrangerFile == null)
                 throw new ArgumentNullException(nameof(sonicArrangerFile));
@@ -63,6 +66,7 @@ namespace SonicArranger
             this.channelMode = channelMode;
             this.song = sonicArrangerFile.Songs[song];
             this.pal = pal;
+            this.interpolate = interpolate;
             allowLowPassFilter = allowAmigaLowPassFilter;
 
             if (this.song.NBIrqps < 1 || this.song.NBIrqps > 200)
@@ -72,9 +76,6 @@ namespace SonicArranger
             buffer = new byte[2 * sampleRate * (int)channelMode];
 
             interruptDelay = 1.0 / this.song.NBIrqps;
-
-            for (int i = 0; i < PaulaState.NumTracks; ++i)
-                tracks[i] = new TrackState(i, paulaState, sonicArrangerFile);
 
             Reset();
         }
@@ -92,13 +93,21 @@ namespace SonicArranger
 
             lock (loadMutex)
             {
-                paulaState.Reset(allowLowPassFilter, pal);
+                paulaState.Reset(allowLowPassFilter, pal, interpolate, sampleRate);
                 playTime = 0.0;
                 nextInterruptTime = 0.0;
-                songSpeed = song.SongSpeed;
-                patternIndex = song.StartPos;
-                noteIndex = 0;
-                divisionTick = 0;
+                // as SA_LoadSong: the first interrupt starts the start position
+                songState.Speed = song.SongSpeed;
+                songState.PatternLength = song.PatternLength;
+                songState.OverLinePos = song.StartPos - 1;
+                songState.SongSpeedPos = song.SongSpeed;
+                songState.OverPatternPos = song.PatternLength;
+                songState.SyncValue = 0;
+                currentPosition = -1;
+                // the noise generators: the same noise on each run
+                random = new Random(0x5a);
+                for (int i = 0; i < PaulaState.NumTracks; ++i)
+                    tracks[i] = new TrackState(i, paulaState, sonicArrangerFile, songState, random);
                 endOfStreamIndex = null;
                 processedAmount = 0;
                 bufferSampleIndex = 0;
@@ -309,109 +318,115 @@ namespace SonicArranger
 
                 for (double d = 0.0; d < deltaTime; d += tick)
                 {
-                    if (endOfStreamIndex != null && endOfStreamIndex == processedAmount + bufferIndex)
+                    if (endOfStreamIndex != null && processedAmount + bufferIndex >= endOfStreamIndex)
                         return;
 
-                    bool processTick = nextInterruptTime <= playTime;
-
-                    if (processTick)
+                    if (nextInterruptTime <= playTime)
                     {
-                        if (divisionTick++ % songSpeed == 0)
-                            ProcessNotes();
-                    }
-
-                    for (int i = 0; i < PaulaState.NumTracks; ++i)
-                    {
-                        paulaState.UpdateCurrentSample(i, playTime);
-                    }
-
-                    if (processTick)
-                    {
-                        for (int i = 0; i < PaulaState.NumTracks; ++i)
-                            tracks[i].Tick(songSpeed);
-
+                        Interrupt(bufferIndex, loop);
                         nextInterruptTime += interruptDelay;
+
+                        if (endOfStreamIndex != null && processedAmount + bufferIndex >= endOfStreamIndex)
+                            return;
                     }
 
                     if (channelMode == ChannelMode.Quad)
                     {
                         for (int i = 0; i < 4; i++)
                         {
-                            var channelData = paulaState.ProcessTrackOutput(i, playTime) * 128.0;
+                            var channelData = paulaState.ProcessTrackOutput(i) * 128.0;
                             buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(channelData))));
                         }
                     }
                     else if (channelMode == ChannelMode.Stereo)
                     {
-                        var left = paulaState.ProcessLeftOutput(playTime) * 128.0;
-                        var right = paulaState.ProcessRightOutput(playTime) * 128.0;
+                        var left = paulaState.ProcessLeftOutput() * 128.0;
+                        var right = paulaState.ProcessRightOutput() * 128.0;
                         buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(left))));
                         buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(right))));
                     }
                     else if (channelMode == ChannelMode.Mono)
                     {
-                        var data = paulaState.Process(playTime) * 128.0;
+                        var data = paulaState.Process() * 128.0;
                         buffer[bufferIndex++] = unchecked((byte)(sbyte)Math.Max(-128, Math.Min(127, Math.Round(data))));
                     }
 
+                    paulaState.Advance();
                     playTime += tick;
                 }
+            }
+        }
 
-                void ProcessNotes()
+        /// <summary>
+        /// The interrupt of the replayer (SA_IrqLowLevel): the repeat parts
+        /// of the samples started in the last one, every speed ticks the
+        /// next row, and in every tick the effects of the 4 voices.
+        /// </summary>
+        void Interrupt(int bufferIndex, bool loop)
+        {
+            foreach (var track in tracks)
+                track.RepeatSample();
+
+            bool[] startDma = new bool[PaulaState.NumTracks];
+
+            if (++songState.SongSpeedPos >= songState.Speed)
+            {
+                songState.SongSpeedPos = 0;
+
+                if (!AdvanceSong(bufferIndex, loop))
+                    return;
+
+                for (int i = 0; i < PaulaState.NumTracks; ++i)
                 {
-                    int? noteChangeIndex = null;
-                    int? patternChangeIndex = null;
-
-                    for (int i = 0; i < PaulaState.NumTracks; ++i)
-                    {
-                        var voice = sonicArrangerFile.Voices[patternIndex * 4 + i];
-                        var note = sonicArrangerFile.Notes[voice.NoteAddress + noteIndex];
-                        tracks[i].Play(note, voice.NoteTranspose, voice.SoundTranspose, playTime);
-                        tracks[i].ProcessNoteCommand(note.Command, note.CommandInfo, ref songSpeed,
-                            patternIndex, out var trackNoteChangeIndex, out var trackPatternChangeIndex);
-
-                        if (trackNoteChangeIndex != null)
-                            noteChangeIndex = trackNoteChangeIndex;
-                        if (trackPatternChangeIndex != null)
-                            patternChangeIndex = trackPatternChangeIndex;
-                    }
-
-                    if (noteChangeIndex != null)
-                    {
-                        noteIndex = noteChangeIndex.Value;
-
-                        if (patternChangeIndex != null)
-                            patternIndex = patternChangeIndex.Value;
-                    }
-                    else
-                    {
-                        ++noteIndex;
-                    }
-                    if (noteIndex >= song.PatternLength)
-                    {
-                        noteIndex = 0;
-
-                        if (patternChangeIndex != null)
-                            patternIndex = patternChangeIndex.Value;
-                        else
-                            ++patternIndex;
-                    }
-                    if (patternIndex > song.StopPos)
-                    {
-                        if (loop)
-                        {
-                            ++LoopCounter;
-                            patternIndex = Math.Min(song.RepeatPos, song.StopPos);
-                        }
-                        else
-                        {
-                            // one full note till the end which lasts for noteDuration
-                            int remainingSamples = (int)(song.GetNoteDuration(songSpeed) * sampleRate);
-                            endOfStreamIndex = processedAmount + bufferIndex + remainingSamples * ((int)channelMode) - 1;
-                        }
-                    }
+                    var voice = sonicArrangerFile.Voices[currentPosition * 4 + i];
+                    int address = voice.NoteAddress + songState.OverPatternPos;
+                    var note = address >= 0 && address < sonicArrangerFile.Notes.Length ? sonicArrangerFile.Notes[address] : new Note();
+                    startDma[i] = tracks[i].Advance(note, voice.NoteTranspose, voice.SoundTranspose);
                 }
             }
+
+            foreach (var track in tracks)
+                track.Process();
+
+            for (int i = 0; i < PaulaState.NumTracks; ++i)
+            {
+                if (startDma[i])
+                    paulaState.StartDma(i);
+            }
+        }
+
+        /// <summary>
+        /// The next row (SA_AdvanceSong): the next row of the pattern, or the
+        /// first row of the next position. A position after the stop position
+        /// goes on at the repeat position. Going back to a position played
+        /// already ends the song, unless it loops. False when the song ended.
+        /// </summary>
+        bool AdvanceSong(int bufferIndex, bool loop)
+        {
+            if (++songState.OverPatternPos < songState.PatternLength && currentPosition >= 0)
+                return true;
+
+            songState.OverPatternPos = 0;
+            ++songState.OverLinePos;
+
+            if (song.StopPos < songState.OverLinePos)
+                songState.OverLinePos = song.RepeatPos;
+
+            int position = Math.Max(0, Math.Min(songState.OverLinePos, sonicArrangerFile.Voices.Length / 4 - 1));
+
+            if (currentPosition >= 0 && position <= currentPosition)
+            {
+                if (!loop)
+                {
+                    endOfStreamIndex = processedAmount + bufferIndex;
+                    return false;
+                }
+
+                ++LoopCounter;
+            }
+
+            currentPosition = position;
+            return true;
         }
     }
 }

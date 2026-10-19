@@ -3,11 +3,24 @@
 namespace SonicArranger
 {
     /// <summary>
-    /// This mimicks the audio channel data of the Amiga
-    /// which can be found at 0xdff0a0, 0xdff0b0, 0xdff0c0
-    /// and 0xdff0d0 for the 4 audio channels.
-    /// 
+    /// This mimicks the 4 audio channels of the Amiga (Paula) which can be
+    /// found at 0xdff0a0, 0xdff0b0, 0xdff0c0 and 0xdff0d0.
+    ///
     /// It is documented at http://amiga-dev.wikidot.com/information:hardware.
+    ///
+    /// Like the hardware, each channel plays a block of data (AUDxLC and
+    /// AUDxLEN) with the rate given by the period (AUDxPER): one byte every
+    /// period clock cycles, so changing the period changes the speed but
+    /// not the position. A location and length written while the channel
+    /// plays only take effect when the current block ends (the registers
+    /// are latched); the channel then plays the new block, again and again.
+    /// Turning the DMA of a channel on starts the block written last from
+    /// its beginning.
+    ///
+    /// The output of a channel is the byte being played (held for the whole
+    /// period) times AUDxVOL / 64. Optionally the bytes are interpolated
+    /// linearly instead, which sounds smoother but is not what the hardware
+    /// does.
     /// </summary>
     internal class PaulaState
     {
@@ -15,444 +28,244 @@ namespace SonicArranger
 
         public class TrackState
         {
-            byte[] data = null;
-            int dataIndex = 0;
-
-            public bool DataChanged { get; set; } = false;
-
+            // the latched location (AUDxLC) and length in bytes (AUDxLEN * 2)
+            internal byte[] Data;
+            internal int Offset;
+            internal int Length;
             /// <summary>
-            /// Source data for playback.
-            /// 
-            /// This mimicks the audio channel location bits at
-            /// AUDxLCH and AUDxLCL.
-            /// </summary>
-            public byte[] Data
-            {
-                get => data;
-                set
-                {
-                    if (data != value)
-                    {
-                        data = value;
-                        DataChanged = true;
-                    }
-                }
-            }
-            /// <summary>
-            /// Length of the data to use.
-            /// 
-            /// This mimicks the audio channel length at AUDxLEN.
-            /// </summary>
-            public int Length { get; set; }
-            /// <summary>
-            /// Current period value (note frequency).
-            /// 
-            /// This mimicks the audio channel period at AUDxPER
+            /// Current period value (AUDxPER).
             /// </summary>
             public int Period { get; set; }
             /// <summary>
-            /// Current output volume.
-            /// 
-            /// This mimicks the audio channel volume at AUDxVOL
+            /// Current output volume (AUDxVOL). Values above 64 count as 64.
             /// </summary>
             public int Volume { get; set; }
-            /// <summary>
-            /// The current data index into the source data.
-            /// 
-            /// This together with <see cref="Data"/> is used
-            /// for playback by replacing the DMA audio controller
-            /// which fills AUDxDAT automatically.
-            /// </summary>
-            public int DataIndex
-            {
-                get => dataIndex;
-                set
-                {
-                    if (dataIndex != value)
-                    {
-                        dataIndex = value;
-                        DataChanged = true;
-                    }
-                }
-            }
+            internal bool DmaEnabled;
+            // the block being played
+            internal byte[] CurrentData;
+            internal int CurrentOffset;
+            internal int CurrentLength;
+            internal double Position;
         }
 
-        class CurrentTrackState
-        {
-            public byte[] Data { get; set; }
-            public double StartPlayTime { get; set; }
-        }
-
-        public interface ICurrentSample
-        {
-            sbyte Sample { get; set; }
-            int Index { get; }
-            int Length { get; }
-            sbyte this[int index] { get; set; }
-            byte[] CopyTarget { get; }
-        }
-
-        class CurrentSample : ICurrentSample
-        {
-            readonly CurrentTrackState currentTrackState;
-
-            public CurrentSample(CurrentTrackState currentTrackState)
-            {
-                this.currentTrackState = currentTrackState;
-            }
-
-            public int Index { get; set; } = 0;
-            public int NextIndex => Index == Length - 1 ? 0 : Index + 1;
-            public double Gamma { get; set; } = 0.0;
-            public int Length => currentTrackState.Data?.Length ?? 0;
-            public byte[] CopyTarget => currentTrackState.Data;
-
-            public sbyte Sample
-            {
-                get => this[Index];
-                set => this[Index] = value;
-            }
-
-            public sbyte this[int index]
-            {
-                get => currentTrackState.Data == null || index >= currentTrackState.Data.Length
-                    ? (sbyte)0 : unchecked((sbyte)currentTrackState.Data[index]);
-                set
-                {
-                    if (currentTrackState.Data != null && index < currentTrackState.Data.Length)
-                        currentTrackState.Data[index] = unchecked((byte)value);
-                }
-            }
-        }
-
-        public delegate void TrackFinishedHandler(int trackIndex, double currentPlayTime);
-        event TrackFinishedHandler track1Finished;
-        event TrackFinishedHandler track2Finished;
-        event TrackFinishedHandler track3Finished;
-        event TrackFinishedHandler track4Finished;
         public readonly TrackState[] Tracks = new TrackState[NumTracks];
-        readonly CurrentTrackState[] currentTrackStates = new CurrentTrackState[NumTracks];
-        readonly CurrentSample[] currentSamples = new CurrentSample[4];
-        public ICurrentSample[] CurrentSamples => currentSamples;
-        const double palClockFrequency = 7093789.2;
-        const double ntscClockFrequency = 7159090.5;
+        const double palClockFrequency = 3546895.0;
+        const double ntscClockFrequency = 3579545.0;
         double clockFrequency = palClockFrequency;
-        int masterVolume = 64;
-        public int MasterVolume
-        {
-            get => masterVolume;
-            set => masterVolume = Math.Max(0, Math.Min(value, 64));
-        }
-        public bool UseLowPassFilter
-        {
-            get;
-            set;
-        } = true;
         bool allowLowPassFilter = true;
+        bool interpolate = false;
+        uint sampleRate = 44100;
         readonly LowPassFilter[] lowPassFilters = new LowPassFilter[4];
+
+        /// <summary>
+        /// The master volume of the replayer (0 to 63). It starts with 63.
+        /// </summary>
+        public int MasterVolume { get; set; } = 63;
+
+        /// <summary>
+        /// The power LED, which switches the low pass filter of the Amiga.
+        /// The replayer turns it off when a song starts; note command E
+        /// switches it.
+        /// </summary>
+        public bool UseLowPassFilter { get; set; } = false;
 
         public PaulaState()
         {
             for (int i = 0; i < NumTracks; ++i)
-            {
                 Tracks[i] = new TrackState();
-                currentTrackStates[i] = new CurrentTrackState();
-                currentSamples[i] = new CurrentSample(currentTrackStates[i]);
-            }
             for (int i = 0; i < lowPassFilters.Length; ++i)
-            {
                 lowPassFilters[i] = new LowPassFilter();
-            }
         }
 
-        public void Reset(bool allowLowPassFilter, bool pal)
+        public void Reset(bool allowLowPassFilter, bool pal, bool interpolate, uint sampleRate)
         {
             this.allowLowPassFilter = allowLowPassFilter;
+            this.interpolate = interpolate;
+            this.sampleRate = sampleRate;
             clockFrequency = pal ? palClockFrequency : ntscClockFrequency;
+            MasterVolume = 63;
+            UseLowPassFilter = false;
 
-            for (int i = 0; i < lowPassFilters.Length; ++i)
-            {
-                lowPassFilters[i].Reset();
-            }
+            foreach (var filter in lowPassFilters)
+                filter.Reset(sampleRate);
 
             for (int i = 0; i < NumTracks; ++i)
-            {
-                var track = Tracks[i];
-                track.Data = null;
-                track.Length = 0;
-                track.Period = 0;
-                track.Volume = 0;
-                track.DataIndex = 0;
-
-                var trackState = currentTrackStates[i];
-                trackState.Data = null;
-                trackState.StartPlayTime = 0.0;
-
-                currentSamples[i].Index = 0;
-                currentSamples[i].Gamma = 0.0;
-            }
+                Tracks[i] = new TrackState();
         }
 
-        public void StopTrack(int trackIndex)
+        /// <summary>
+        /// Writes AUDxLC and AUDxLEN (length in bytes). While the channel
+        /// plays, they take effect when the current block ends.
+        /// </summary>
+        public void SetLocation(int trackIndex, byte[] data, int offset, int length)
         {
-            if (trackIndex < 0 || trackIndex > NumTracks)
-                throw new IndexOutOfRangeException("Invalid track index.");
-
             var track = Tracks[trackIndex];
-            var trackState = currentTrackStates[trackIndex];
-
-            track.Data = null;
-            trackState.Data = null;
-            currentSamples[trackIndex].Index = 0;
-            currentSamples[trackIndex].Gamma = 0;
+            track.Data = data;
+            track.Offset = offset;
+            track.Length = length;
         }
 
-        public void StartTrackData(int trackIndex, double currentPlayTime)
+        public void StopDma(int trackIndex)
         {
-            if (trackIndex < 0 || trackIndex > NumTracks)
-                throw new IndexOutOfRangeException("Invalid track index.");
+            Tracks[trackIndex].DmaEnabled = false;
+        }
 
+        /// <summary>
+        /// Turns the DMA of a channel on. If it was off, the channel starts
+        /// the block written last.
+        /// </summary>
+        public void StartDma(int trackIndex)
+        {
             var track = Tracks[trackIndex];
-            var trackState = currentTrackStates[trackIndex];
 
-            if (track.DataChanged)
+            if (track.DmaEnabled)
+                return;
+
+            track.DmaEnabled = true;
+            LoadBlock(track);
+            track.Position = 0.0;
+        }
+
+        static void LoadBlock(TrackState track)
+        {
+            track.CurrentData = track.Data;
+            track.CurrentOffset = track.Offset;
+            track.CurrentLength = track.Length;
+        }
+
+        static int ByteAt(byte[] data, int index)
+        {
+            return data == null || index < 0 || index >= data.Length ? 0 : unchecked((sbyte)data[index]);
+        }
+
+        bool Playing(TrackState track)
+        {
+            return track.DmaEnabled && track.CurrentLength > 0 && track.Period > 0;
+        }
+
+        /// <summary>
+        /// The output of a channel (-1 to 1) at its current position.
+        /// </summary>
+        public double ProcessTrack(int trackIndex)
+        {
+            var track = Tracks[trackIndex];
+
+            if (!Playing(track))
+                return 0.0;
+
+            int index = (int)track.Position;
+            double value = ByteAt(track.CurrentData, track.CurrentOffset + index) / 128.0;
+
+            if (interpolate)
             {
-                int size = track.Data.Length - track.DataIndex;
-
-                if (size <= 0)
-                    throw new ArgumentOutOfRangeException("Track data index must be less than the data size.");
-
-                trackState.Data = new byte[size];
-                Buffer.BlockCopy(track.Data, track.DataIndex, trackState.Data, 0, size);
-                track.DataChanged = false;
+                // the next byte: in this block, or the first one of the next block
+                double next = index + 1 < track.CurrentLength
+                    ? ByteAt(track.CurrentData, track.CurrentOffset + index + 1) / 128.0
+                    : ByteAt(track.Data, track.Offset) / 128.0;
+                value += (track.Position - index) * (next - value);
             }
 
-            trackState.StartPlayTime = currentPlayTime;
-            currentSamples[trackIndex].Index = 0;
-            currentSamples[trackIndex].Gamma = 0;
+            return Math.Min(64, Math.Max(0, track.Volume)) * value / 64.0;
+        }
+
+        /// <summary>
+        /// Moves the channels on by one output sample.
+        /// </summary>
+        public void Advance()
+        {
+            foreach (var track in Tracks)
+            {
+                if (!Playing(track))
+                    continue;
+
+                track.Position += clockFrequency / track.Period / sampleRate;
+
+                // at the end of a block the latched location and length are used
+                while (track.Position >= track.CurrentLength)
+                {
+                    track.Position -= track.CurrentLength;
+                    LoadBlock(track);
+
+                    if (track.CurrentLength <= 0)
+                    {
+                        track.Position = 0.0;
+                        break;
+                    }
+                }
+            }
         }
 
         class LowPassFilter
         {
-            // According to Amiga hardware manual the hardward audio low-pass filter
-            // starts decreasing frequencies starting at 4kHz and won't let any
-            // frequencies above 7kHz through. But more precisely it's a -12dB/oct
-            // (second order) Butterworth low-pass filter with a cutoff frequency of
-            // around 3.3kHz.
-            //
-            // Amiga 1200       | 6 dB/oct    | 28867 Hz , As is
-            // Amiga 1200 (LED) | 2x12 dB/oct | 3275 Hz , Butterworth
-            //
-            // | 2nd-order Butterworth s-domain coefficients are: |
-            // |                                                  |
-            // | b0 = 1.0  b1 = 0        b2 = 0                   |
-            // | a0 = 1    a1 = sqrt(2)  a2 = 1                   |
-            // |                                                  |
-            const double CutOffFrequency = 3275.0; // 3.275kHz
+            // The low pass filter that the power LED switches: a second order
+            // (-12 dB/oct) Butterworth filter with a cutoff frequency of about
+            // 3.3 kHz.
+            const double CutOffFrequency = 3275.0;
 
+            double b0, b1, b2, a1, a2;
+            double x1, x2, y1, y2;
 
-            double[] lastInputs = new double[2];
-            double[] lastOutputs = new double[2];
-            const double b0 = 1.0;
-            const double a0 = 1.0;
-            const double a1 = 1.41421;
-            const double a2 = 1.0;
-            const double omega0 = 2.0 * Math.PI * CutOffFrequency / 44100.0;
-            readonly double q, r, s, t, u;
-
-            public LowPassFilter()
+            public void Reset(uint sampleRate)
             {
-                double k = omega0 / Math.Tan(0.5 * omega0 * 44100.0);
+                // bilinear transform with prewarping
+                double k = Math.Tan(Math.PI * CutOffFrequency / sampleRate);
                 double k2 = k * k;
-                double d = a0 * k2 + a1 * k + a2;
-
-                q = (b0 * k2) / d;
-                r = (-2.0 * b0 * k2) / d;
-                s = q;
-                t = (2.0 * a2 - 2.0 * a0 * k2) / d;
-                u = (a0 * k2 - a1 * k + a2) / d;
-            }
-
-            public void Reset()
-            {
-                lastInputs[0] = 0;
-                lastInputs[1] = 0;
-                lastOutputs[0] = 0;
-                lastOutputs[1] = 0;
+                double norm = 1.0 / (1.0 + Math.Sqrt(2.0) * k + k2);
+                b0 = k2 * norm;
+                b1 = 2.0 * b0;
+                b2 = b0;
+                a1 = 2.0 * (k2 - 1.0) * norm;
+                a2 = (1.0 - Math.Sqrt(2.0) * k + k2) * norm;
+                x1 = x2 = y1 = y2 = 0.0;
             }
 
             public double Filter(double value)
             {
-                double output = q * value + r * lastInputs[1] + s * lastInputs[0] - t * lastOutputs[1] - u * lastOutputs[0];
-
-                lastInputs[0] = lastInputs[1];
-                lastInputs[1] = value;
-                lastOutputs[0] = lastOutputs[1];
-                lastOutputs[1] = output;
-
+                double output = b0 * value + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+                x2 = x1;
+                x1 = value;
+                y2 = y1;
+                y1 = output;
                 return output;
             }
         }
 
-        public double ProcessTrack(int trackIndex, double currentPlaybackTime)
+        double Filtered(int filter, double value)
         {
-            if (trackIndex < 0 || trackIndex > NumTracks)
-                throw new IndexOutOfRangeException("Invalid track index.");
+            // the filter always runs, so switching it does not click
+            double filtered = lowPassFilters[filter].Filter(value);
 
-            var data = currentTrackStates[trackIndex].Data;
+            if (allowLowPassFilter && UseLowPassFilter)
+                value = filtered;
 
-            if (data == null || Tracks[trackIndex].Period < 1)
-                return 0.0;
-
-            var currentSample = currentSamples[trackIndex];
-            double leftValue = unchecked((sbyte)data[currentSample.Index]) / 128.0;
-            double rightValue = unchecked((sbyte)data[currentSample.NextIndex]) / 128.0;
-
-            return Tracks[trackIndex].Volume * (leftValue + currentSample.Gamma * (rightValue - leftValue)) / 64.0;
+            return Math.Max(-1.0, Math.Min(1.0, value));
         }
 
-        public void UpdateCurrentSample(int trackIndex, double currentPlaybackTime)
-        {
-            if (trackIndex < 0 || trackIndex > NumTracks)
-                throw new IndexOutOfRangeException("Invalid track index.");
-
-            var trackState = currentTrackStates[trackIndex];
-            var currentSample = currentSamples[trackIndex];
-
-            if (trackState.Data == null || trackState.StartPlayTime > currentPlaybackTime)
-            {
-                currentSample.Index = 0;
-                currentSample.Gamma = 0.0;
-                return;
-            }
-
-            var period = Tracks[trackIndex].Period;
-
-            if (period < 0.01)
-            {
-                currentSample.Index = 0;
-                currentSample.Gamma = 0.0;
-                return;
-            }
-
-            double samplesPerSecond = clockFrequency / (2.0 * period);
-            double trackTime = currentPlaybackTime - trackState.StartPlayTime;
-            double index = samplesPerSecond * trackTime;
-
-            var data = trackState.Data;
-            int leftIndex = (int)index;
-
-            if (leftIndex >= data.Length)
-            {
-                InvokeTrackFinishHandler(trackIndex, currentPlaybackTime);
-
-                if (trackState.Data == null)
-                {
-                    currentSample.Index = 0;
-                    currentSample.Gamma = 0.0;
-                    return;
-                }
-
-                index -= data.Length;
-                leftIndex = 0;
-                trackState.StartPlayTime = currentPlaybackTime;
-            }
-
-            currentSample.Index = leftIndex;
-            currentSample.Gamma = index - leftIndex;
-        }
-
-        void InvokeTrackFinishHandler(int trackIndex, double currentPlaybackTime)
-        {
-            switch (trackIndex)
-            {
-                case 0:
-                    track1Finished?.Invoke(trackIndex, currentPlaybackTime);
-                    break;
-                case 1:
-                    track2Finished?.Invoke(trackIndex, currentPlaybackTime);
-                    break;
-                case 2:
-                    track3Finished?.Invoke(trackIndex, currentPlaybackTime);
-                    break;
-                case 3:
-                    track4Finished?.Invoke(trackIndex, currentPlaybackTime);
-                    break;
-            }
-        }
-
-        public void AttachTrackFinishHandler(int trackIndex, TrackFinishedHandler handler)
-        {
-            switch (trackIndex)
-            {
-                case 0:
-                    track1Finished = null;
-                    track1Finished += handler;
-                    break;
-                case 1:
-                    track2Finished = null;
-                    track2Finished += handler;
-                    break;
-                case 2:
-                    track3Finished = null;
-                    track3Finished += handler;
-                    break;
-                case 3:
-                    track4Finished = null;
-                    track4Finished += handler;
-                    break;
-            }
-        }
-
-        public double Process(double currentPlaybackTime)
+        public double Process()
         {
             double output = 0.0;
 
             for (int i = 0; i < NumTracks; ++i)
-                output += 0.25 * ProcessTrack(i, currentPlaybackTime);
+                output += 0.25 * ProcessTrack(i);
 
-            if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilters[0].Filter(output);
-
-            return Math.Max(-1.0, Math.Min(1.0, output));
+            return Filtered(0, output);
         }
 
-        public double ProcessLeftOutput(double currentPlaybackTime)
+        public double ProcessLeftOutput()
         {
-            double output = 0.0;
-
             // LRRL
-            output += 0.5 * ProcessTrack(0, currentPlaybackTime);
-            output += 0.5 * ProcessTrack(3, currentPlaybackTime);
-
-            if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilters[0].Filter(output);
-
-            return Math.Max(-1.0, Math.Min(1.0, output));
+            return Filtered(0, 0.5 * ProcessTrack(0) + 0.5 * ProcessTrack(3));
         }
 
-        public double ProcessRightOutput(double currentPlaybackTime)
+        public double ProcessRightOutput()
         {
-            double output = 0.0;
-
             // LRRL
-            output += 0.5 * ProcessTrack(1, currentPlaybackTime);
-            output += 0.5 * ProcessTrack(2, currentPlaybackTime);
-
-            if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilters[1].Filter(output);
-
-            return Math.Max(-1.0, Math.Min(1.0, output));
+            return Filtered(1, 0.5 * ProcessTrack(1) + 0.5 * ProcessTrack(2));
         }
 
-        public double ProcessTrackOutput(int trackIndex, double currentPlaybackTime)
+        public double ProcessTrackOutput(int trackIndex)
         {
-            double output = ProcessTrack(trackIndex, currentPlaybackTime);
-
-            if (allowLowPassFilter && UseLowPassFilter)
-                output = lowPassFilters[trackIndex].Filter(output);
-
-            return Math.Max(-1.0, Math.Min(1.0, output));
+            return Filtered(trackIndex, ProcessTrack(trackIndex));
         }
     }
 }

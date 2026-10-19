@@ -1,0 +1,8 @@
+{
+	"name": "sa2026-tests",
+	"version": "0.1.0",
+	"type": "executable",
+	"sources": ["src"],
+	"dependencies": ["../lib"],
+	"output": "bin/sa2026-tests"
+}

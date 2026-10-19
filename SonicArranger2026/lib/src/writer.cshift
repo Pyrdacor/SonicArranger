@@ -1,0 +1,198 @@
+//! Writing modules in the module format of Sonic Arranger ("SOAR"), which Sonic Arranger and SonicConvert load.
+
+namespace SonicArranger;
+
+using System;
+
+/// Collects big-endian values.
+struct ByteWriter
+{
+    List<uint8> Data;
+
+    static ByteWriter Create()
+    {
+        return ByteWriter { Data = List<uint8>.Create(4096) };
+    }
+
+    void U8(int v)
+    {
+        Data.Add((uint8)(v & 0xff));
+    }
+
+    void U16(int v)
+    {
+        U8(v >> 8);
+        U8(v);
+    }
+
+    void S32(int v)
+    {
+        U16(v >> 16);
+        U16(v);
+    }
+
+    void Bytes(uint8[] bytes)
+    {
+        Data.AddRange(bytes);
+    }
+
+    /// Exactly count bytes: the bytes, cut or padded with zeros.
+    void Fixed(uint8[] bytes, int count)
+    {
+        for (var i = 0; i < count; i += 1)
+            U8(i < bytes.Length ? bytes[i] : 0);
+    }
+
+    void Tag(StringSlice tag)
+    {
+        for (var i = 0; i < 4; i += 1)
+            U8(i < tag.Length ? (int)tag[i] : 0);
+    }
+}
+
+void WriteInstrument(ref ByteWriter w, Instrument inst)
+{
+    w.U16(inst.SynthMode);
+    w.U16(inst.SampleWaveNo);
+    w.U16(inst.Length);
+    w.U16(inst.Repeat);
+    w.Fixed(inst.Unknown8, 8);
+    w.U16(inst.Volume);
+    w.U16(inst.FineTuning);
+    w.U16(inst.Portamento);
+    w.U16(inst.VibDelay);
+    w.U16(inst.VibSpeed);
+    w.U16(inst.VibLevel);
+    w.U16(inst.AmfWave);
+    w.U16(inst.AmfDelay);
+    w.U16(inst.AmfLength);
+    w.U16(inst.AmfRepeat);
+    w.U16(inst.AdsrWave);
+    w.U16(inst.AdsrDelay);
+    w.U16(inst.AdsrLength);
+    w.U16(inst.AdsrRepeat);
+    w.U16(inst.SustainPt);
+    w.U16(inst.SustainVal);
+    w.Fixed(inst.Unknown16, 16);
+    w.U16(inst.Effect1);
+    w.U16(inst.Effect);
+    w.U16(inst.Effect2);
+    w.U16(inst.Effect3);
+    w.U16(inst.EffectDelay);
+    for (var i = 0; i < 3; i += 1)
+    {
+        var arp = i < inst.Arpeggios.Length ? inst.Arpeggios[i] : new Arpeggio();
+        w.U8(arp.Length);
+        w.U8(arp.Repeat);
+        w.Fixed(arp.Data, 14);
+    }
+    w.Fixed(inst.Name, 30);
+}
+
+/// The name of a sample of a packed file (which has none): that of the first instrument playing it, as SonicConvert
+/// does it, else "--blank--".
+uint8[] SampleName(const ref Module m, int sample)
+{
+    foreach (var inst in m.Instruments)
+    {
+        if (!inst.IsSynth() && inst.SampleWaveNo == sample)
+            return inst.Name;
+    }
+    return NameBytes("--blank--", 30);
+}
+
+/// The bytes of a module in the module format.
+uint8[] WriteSoar(const ref Module m)
+{
+    var w = ByteWriter.Create();
+    w.Tag("SOAR");
+    w.Tag(m.Version);
+
+    w.Tag("STBL");
+    w.S32(m.Songs.Count());
+    foreach (var song in m.Songs)
+    {
+        w.U16(song.Speed);
+        w.U16(song.PatternLength);
+        w.U16(song.StartPos);
+        w.U16(song.StopPos);
+        w.U16(song.RepeatPos);
+        w.U16(song.TicksPerSecond);
+    }
+
+    w.Tag("OVTB");
+    w.S32(m.Voices.Count() / 4);
+    foreach (var voice in m.Voices)
+    {
+        w.U16(voice.NoteAddress);
+        w.U8(voice.SoundTranspose);
+        w.U8(voice.NoteTranspose);
+    }
+
+    w.Tag("NTBL");
+    w.S32(m.Notes.Count());
+    foreach (var note in m.Notes)
+    {
+        w.U8(note.Value);
+        w.U8(note.Instrument);
+        w.U8(note.Flags);
+        w.U8(note.Param);
+    }
+
+    w.Tag("INST");
+    w.S32(m.Instruments.Count());
+    foreach (var inst in m.Instruments)
+        WriteInstrument(ref w, inst);
+
+    w.Tag("SD8B");
+    int count = m.Samples.Count();
+    w.S32(count);
+    if (count > 0)
+    {
+        foreach (var sample in m.Samples)
+            w.S32(m.SampleInfo ? sample.Length : sample.Data.Length / 2);
+        foreach (var sample in m.Samples)
+            w.S32(m.SampleInfo ? sample.Repeat : 1);
+        for (var i = 0; i < count; i += 1)
+            w.Fixed(m.SampleInfo ? m.Samples[i].Name : SampleName(m, i), 30);
+        foreach (var sample in m.Samples)
+            w.S32(sample.Data.Length);
+        foreach (var sample in m.Samples)
+            w.Bytes(sample.Data);
+    }
+
+    w.Tag("SYWT");
+    w.S32(m.Waves.Count());
+    foreach (var wave in m.Waves)
+        w.Fixed(wave, 128);
+    w.Tag("SYAR");
+    w.S32(m.AdsrWaves.Count());
+    foreach (var wave in m.AdsrWaves)
+        w.Fixed(wave, 128);
+    w.Tag("SYAF");
+    w.S32(m.AmfWaves.Count());
+    foreach (var wave in m.AmfWaves)
+        w.Fixed(wave, 128);
+
+    // the editor state: that of the file, else all voices on and everything at 0 (as Sonic Arranger 1.1 writes it)
+    w.Tag("EDAT");
+    if (m.EditData.Length == 20)
+        w.Bytes(m.EditData);
+    else
+    {
+        w.Tag("V1.1");
+        for (var i = 0; i < 4; i += 1)
+            w.U8(1);
+        for (var i = 0; i < 6; i += 1)
+            w.U16(0);
+    }
+    return w.Data.ToArray();
+}
+
+/// Saves a module in the module format.
+Error<void> SaveModule(const ref Module m, StringSlice path)
+{
+    var bytes = WriteSoar(m);
+    try File.WriteAllBytes(path, bytes);
+    return;
+}

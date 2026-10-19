@@ -1,0 +1,9 @@
+{
+	"name": "sonicarranger2026",
+	"version": "0.1.0",
+	"type": "executable",
+	"sources": ["src"],
+	"dependencies": ["lib"],
+	"output": "bin/sonicarranger2026",
+	"optimize": 2
+}

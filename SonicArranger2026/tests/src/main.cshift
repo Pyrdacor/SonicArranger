@@ -1,0 +1,126 @@
+// The tests of the module library: a module made in code is saved and read back unchanged; every file given is read,
+// saved in the module format and read back; a module file must come out byte for byte the same, a packed file is
+// saved into the folder given with --out (for tests/run.sh, which converts both with SonicConvert and compares).
+//
+//   sa2026-tests [--out folder] [files...]
+
+using System;
+using SonicArranger;
+
+int failures = 0;
+
+void Check(bool ok, StringSlice what)
+{
+    if (!ok)
+    {
+        Console.WriteLine("FAILED: " + what);
+        failures += 1;
+    }
+}
+
+bool SameBytes(uint8[] a, uint8[] b)
+{
+    if (a.Length != b.Length)
+        return false;
+    for (var i = 0; i < a.Length; i += 1)
+    {
+        if (a[i] != b[i])
+            return false;
+    }
+    return true;
+}
+
+// a module made in code: a song, a note with a command, a synth instrument, a sample, a wave of each kind
+void TestMadeInCode()
+{
+    var m = Module.Create();
+    m.Notes[0] = Note { Value = 37, Instrument = 1, Flags = 0x9f, Param = 0x04 };
+    m.Notes[1] = Note { Value = 108, Instrument = 2, Flags = 0x0c, Param = 0x40 };
+    var inst = Instrument { SynthMode = 1, Length = 32, Volume = 64, VibDelay = 255, VibSpeed = 18, VibLevel = 160,
+                            AdsrDelay = 1, AmfDelay = 1, Unknown8 = new uint8[8], Unknown16 = new uint8[16],
+                            Effect = 17, Effect1 = -3, Arpeggios = new Arpeggio[3], Name = NameBytes("Synth bass", 30) };
+    for (var i = 0; i < 3; i += 1)
+        inst.Arpeggios[i] = Arpeggio { Length = i, Data = new uint8[14] };
+    m.Instruments.Add(inst);
+    var wave = new uint8[128];
+    for (var i = 0; i < 128; i += 1)
+        wave[i] = (uint8)(i * 2);
+    m.Waves.Add(wave);
+    m.AdsrWaves.Add(new uint8[128]);
+    m.AmfWaves.Add(new uint8[128]);
+    m.Samples.Add(Sample { Data = new uint8[] { 1, 2, 3, 250 }, Length = 2, Repeat = 1, Name = NameBytes("Drum", 30) });
+    m.Voices[2] = Voice { NoteAddress = 0, SoundTranspose = -2, NoteTranspose = 12 };
+
+    var bytes = WriteSoar(m);
+    Check(TextOf(bytes[0..4].ToArray()) == "SOAR", "a saved module starts with SOAR");
+    if (ReadModule(bytes) is not Module back)
+    {
+        Check(false, "a module made in code can be read back");
+        return;
+    }
+    Check(SameBytes(WriteSoar(back), bytes), "a module made in code is saved the same after reading it back");
+    Check(back.Notes[0].Command() == 0xf && back.Notes[0].Arpeggio() == 1 && back.Notes[0].NoSoundTranspose(),
+          "the flags of a note");
+    Check(back.Voices[2].SoundTranspose == -2 && back.Voices[2].NoteTranspose == 12, "signed transposes");
+    Check(back.Instruments[0].Effect1 == -3 && TextOf(back.Instruments[0].Name) == "Synth bass", "an instrument");
+    Check(back.Samples[0].Data[3] == 250 && TextOf(back.Samples[0].Name) == "Drum", "a sample");
+    Check(back.Songs[0].Bpm() == 125, "125 BPM at speed 6 and 50 ticks per second");
+    Check(NoteName(37) == "C-3" && NoteName(0) == "---" && NoteName(2) == "C#0", "note names");
+
+    // damaged data
+    Check(ReadModule(bytes[0..100].ToArray()) is error, "a cut module is an error");
+    Check(ReadModule(new uint8[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }) is error, "data without Sonic Arranger is an error");
+}
+
+void TestFile(StringSlice path, StringSlice outDir)
+{
+    var read = File.ReadAllBytes(path);
+    if (read is not uint8[] data)
+    {
+        Check(false, "cannot read " + path);
+        return;
+    }
+    if (ReadModule(data) is not Module m)
+    {
+        Check(false, "cannot load " + path);
+        return;
+    }
+    var saved = WriteSoar(m);
+    if (!m.Packed)
+        Check(SameBytes(saved, data), path.ToString() + ": saved again byte for byte");
+    if (ReadModule(saved) is Module back)
+        Check(SameBytes(WriteSoar(back), saved), path.ToString() + ": the saved module is read back the same");
+    else
+        Check(false, path.ToString() + ": the saved module cannot be loaded");
+    Console.WriteLine($"{Path.GetFileName(path)}: {(m.Packed ? "packed" : "module " + m.Version)}, {m.Songs.Count()} songs, " +
+                      $"{m.Positions()} positions, {m.Notes.Count()} notes, {m.Instruments.Count()} instruments, " +
+                      $"{m.Samples.Count()} samples, {m.Waves.Count()} waves{(m.Owner.Length > 0 ? ", by " + m.Owner : "")}");
+    if (outDir.Length > 0)
+    {
+        if (File.WriteAllBytes(Path.Combine(outDir, Path.GetFileName(path).ToString() + ".soar"), saved) is error e)
+            Check(false, "cannot write into " + outDir);
+    }
+}
+
+int Main(string[] args)
+{
+    TestMadeInCode();
+    string outDir = "";
+    for (var i = 0; i < args.Length; i += 1)
+    {
+        if (args[i] == "--out" && i + 1 < args.Length)
+        {
+            outDir = args[i + 1];
+            i += 1;
+        }
+        else
+            TestFile(args[i], outDir);
+    }
+    if (failures > 0)
+    {
+        Console.WriteLine($"{failures} checks failed");
+        return 1;
+    }
+    Console.WriteLine("all checks passed");
+    return 0;
+}

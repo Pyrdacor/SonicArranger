@@ -1,0 +1,38 @@
+//! Names for the tracker: notes, commands and instrument effects.
+
+namespace SonicArranger;
+
+using System;
+
+const ReadOnlySlice<string> NoteNames = ["C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"];
+
+/// The name of a note value as the tracker shows it: "C-1", "F#3"; "---" for none.
+string NoteName(int value)
+{
+    if (value == 0)
+        return "---";
+    if (value < 1 || value > 108)
+        return value.ToString("X3");
+    int n = value - 1;
+    return NoteNames[n % 12] + (n / 12).ToString();
+}
+
+/// The names of the note commands 0 to F.
+const ReadOnlySlice<string> CommandNames = ["Arpeggio", "Slide up/down", "Set ADSR index", "Unused", "Reset vibrato",
+                                            "Set vibrato", "Set master volume", "Set portamento", "Clear portamento",
+                                            "Set pattern length", "Volume slide", "Position jump", "Set volume", "Pattern break",
+                                            "Hardware LPF", "Set speed"];
+
+/// The names of the instrument effects 0 to 17.
+const ReadOnlySlice<string> EffectNames = ["No effect", "Wave negator", "Free negator", "Rotate vertical", "Rotate horizontal",
+                                           "Alien voice", "Poly negator", "Shack wave 1", "Shack wave 2", "Metawdrpk",
+                                           "Laser AMF", "Wave alias", "Noise generator 1", "Low pass filter 1",
+                                           "Low pass filter 2", "Oscillator 1", "Noise generator 2", "FM drum"];
+
+/// The name of an instrument effect.
+string EffectName(int effect)
+{
+    if (effect < 0 || effect >= EffectNames.Length)
+        return $"Effect {effect}";
+    return EffectNames[effect];
+}

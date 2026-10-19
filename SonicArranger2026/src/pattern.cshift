@@ -1,0 +1,161 @@
+// The pattern view: the rows of the 4 voices of one position, as in the pattern editor of Sonic Arranger. Each cell
+// shows the note, the instrument and the note options in 4 hex digits: the flags and arpeggio table, the command and
+// its parameter ("C-3 01 0F04").
+
+using System;
+using System.Image;
+using System.Ui;
+using SonicArranger;
+
+// The colors of the pattern view.
+struct PatternColors
+{
+    Color Background;
+    Color Beat;          // every 4th row
+    Color Cursor;        // the row of the cursor
+    Color Cell;          // the cell of the cursor
+    Color RowNumber;
+    Color Note;
+    Color Instrument;
+    Color Command;
+    Color Empty;
+    Color Header;
+    Color Line;
+
+    static PatternColors Dark()
+    {
+        return PatternColors { Background = Color.FromRgb(22, 24, 32), Beat = Color.FromRgb(30, 33, 44),
+                               Cursor = Color.FromRgb(40, 52, 84), Cell = Color.FromRgb(64, 86, 140),
+                               RowNumber = Color.FromRgb(110, 118, 140), Note = Color.FromRgb(236, 240, 248),
+                               Instrument = Color.FromRgb(120, 200, 255), Command = Color.FromRgb(255, 190, 110),
+                               Empty = Color.FromRgb(70, 76, 92), Header = Color.FromRgb(36, 40, 54),
+                               Line = Color.FromRgb(50, 55, 72) };
+    }
+
+    static PatternColors Light()
+    {
+        return PatternColors { Background = Color.FromRgb(250, 251, 253), Beat = Color.FromRgb(236, 239, 245),
+                               Cursor = Color.FromRgb(210, 222, 248), Cell = Color.FromRgb(170, 195, 245),
+                               RowNumber = Color.FromRgb(130, 136, 150), Note = Color.FromRgb(20, 24, 32),
+                               Instrument = Color.FromRgb(20, 110, 190), Command = Color.FromRgb(180, 90, 0),
+                               Empty = Color.FromRgb(190, 195, 205), Header = Color.FromRgb(225, 230, 240),
+                               Line = Color.FromRgb(205, 210, 222) };
+    }
+}
+
+// the lowest digits of a value in hex: Hex(-1, 4) is "FFFF"
+string Hex(int value, int digits)
+{
+    return (value & ((1 << (4 * digits)) - 1)).ToString("X" + digits.ToString());
+}
+
+string Dec(int value, int digits)
+{
+    return value.ToString().PadLeft(digits, '0');
+}
+
+// a signed value with its sign: +0, -12
+string Signed(int value)
+{
+    return value < 0 ? value.ToString() : "+" + value.ToString();
+}
+
+// The text of a cell, in three parts.
+string CellNote(Note note)
+{
+    return NoteName(note.Value);
+}
+
+string CellInstrument(Note note)
+{
+    return note.Instrument == 0 ? "--" : Dec(note.Instrument, 2);
+}
+
+string CellOptions(Note note)
+{
+    return Hex(note.Flags >> 4, 1) + Hex(note.Flags & 0xf, 1) + Hex(note.Param, 2);
+}
+
+// The pattern view of a position. Draws into the rest of the window; the rows scroll with the cursor (and with the
+// mouse wheel), a click sets the cursor.
+void PatternView(Ui ui, ref App app)
+{
+    var m = app.Song;
+    var song = m.Songs[app.SongIndex];
+    int rows = Math.Max(1, song.PatternLength);
+    var font = ui.Font();
+    int cw = font.CharWidth();
+    int lh = font.LineHeight() + Math.Max(1, (int)(2.0 * ui.Scale()));
+    var colors = app.Dark ? PatternColors.Dark() : PatternColors.Light();
+
+    var r = ui.Area(0, 0);
+    ui.FillRect(r, colors.Background);
+    // the columns: the row number, then 4 voices of "C-3 01 0F04"
+    int numberWidth = 4 * cw;
+    int cellChars = 12;
+    int voiceWidth = Math.Max(cellChars * cw + cw, (r.Width - numberWidth) / 4);
+    int top = r.Y + lh + lh / 2;
+    int visible = Math.Max(1, (r.Height - (top - r.Y)) / lh);
+
+    // the header: the voices with their pattern address and transposes
+    ui.FillRect(Rect.Create(r.X, r.Y, r.Width, lh + lh / 2), colors.Header);
+    for (var v = 0; v < 4; v += 1)
+    {
+        int x = r.X + numberWidth + v * voiceWidth;
+        if (app.Position < m.Positions())
+        {
+            var voice = m.VoiceAt(app.Position, v);
+            ui.DrawText(x + cw / 2, r.Y + lh / 4, $"Voice {v + 1}", app.Voice == v ? colors.Note : colors.RowNumber);
+            ui.DrawText(x + cw / 2 + 8 * cw, r.Y + lh / 4,
+                        $"{Hex(voice.NoteAddress, 4)} {Signed(voice.SoundTranspose)} {Signed(voice.NoteTranspose)}",
+                        colors.Instrument);
+        }
+        ui.FillRect(Rect.Create(x - 1, r.Y, Math.Max(1, (int)ui.Scale()), r.Height), colors.Line);
+    }
+
+    // input: the wheel scrolls, a click sets the cursor
+    var input = ui.Input();
+    if (ui.Hovered() && input.Wheel != 0)
+        app.ScrollRow -= input.Wheel * 3;
+    if (ui.Clicked() && input.MouseY >= top)
+    {
+        int row = app.ScrollRow + (input.MouseY - top) / lh;
+        int v = (input.MouseX - r.X - numberWidth) / Math.Max(1, voiceWidth);
+        if (row >= 0 && row < rows && v >= 0 && v < 4)
+        {
+            app.Row = row;
+            app.Voice = v;
+        }
+    }
+    // the cursor stays in view
+    if (app.Row < app.ScrollRow)
+        app.ScrollRow = app.Row;
+    if (app.Row >= app.ScrollRow + visible)
+        app.ScrollRow = app.Row - visible + 1;
+    app.ScrollRow = Math.Max(0, Math.Min(app.ScrollRow, rows - visible));
+
+    if (app.Position >= m.Positions())
+        return;
+    for (var i = 0; i < visible && app.ScrollRow + i < rows; i += 1)
+    {
+        int row = app.ScrollRow + i;
+        int y = top + i * lh;
+        if (row == app.Row)
+            ui.FillRect(Rect.Create(r.X, y, r.Width, lh), colors.Cursor);
+        else if (row % 4 == 0)
+            ui.FillRect(Rect.Create(r.X, y, r.Width, lh), colors.Beat);
+        int ty = y + (lh - font.LineHeight()) / 2;
+        ui.DrawText(r.X + cw / 2, ty, Dec(row, 2), colors.RowNumber);
+        for (var v = 0; v < 4; v += 1)
+        {
+            int x = r.X + numberWidth + v * voiceWidth + cw / 2;
+            if (row == app.Row && v == app.Voice)
+                ui.FillRect(Rect.Create(x - cw / 2 + 1, y, voiceWidth - 1, lh), colors.Cell);
+            var note = m.NoteAt(m.VoiceAt(app.Position, v).NoteAddress + row);
+            bool empty = note.IsEmpty();
+            ui.DrawText(x, ty, CellNote(note), note.Value == 0 ? colors.Empty : colors.Note);
+            ui.DrawText(x + 4 * cw, ty, CellInstrument(note), note.Instrument == 0 ? colors.Empty : colors.Instrument);
+            ui.DrawText(x + 7 * cw, ty, CellOptions(note), note.Flags == 0 && note.Param == 0 ? colors.Empty : colors.Command);
+        }
+    }
+}

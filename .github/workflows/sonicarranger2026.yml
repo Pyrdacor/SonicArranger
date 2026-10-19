@@ -1,0 +1,34 @@
+# SonicArranger2026: builds the tracker (Linux and the browser page) and runs its tests with the songs of Ambermoon,
+# including the check that SonicConvert converts the modules saved by SonicArranger2026 to the same WAV.
+name: SonicArranger2026
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env:
+      CSHIFT_VERSION: "0.37"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Install cshiftc
+        run: |
+          curl -sSfL -o cshift.tar.xz "https://github.com/Robert-Schneckenhaus/CShift/releases/download/v$CSHIFT_VERSION/cshift-$CSHIFT_VERSION-linux-x64.tar.xz"
+          mkdir -p "$RUNNER_TEMP/cshift"
+          tar -xJf cshift.tar.xz -C "$RUNNER_TEMP/cshift"
+          echo "CSHIFTC=$RUNNER_TEMP/cshift/cshift-$CSHIFT_VERSION-linux-x64/cshiftc" >> "$GITHUB_ENV"
+      - name: The songs of Ambermoon
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/Pyrdacor/Ambermoon "$RUNNER_TEMP/ambermoon"
+          git -C "$RUNNER_TEMP/ambermoon" sparse-checkout set Music
+      - name: Build
+        run: |
+          "$CSHIFTC" build SonicArranger2026
+          "$CSHIFTC" publish SonicArranger2026
+      - name: Tests
+        run: SonicArranger2026/tests/run.sh "$RUNNER_TEMP/ambermoon/Music"

@@ -14,9 +14,6 @@ jobs:
       CSHIFT_VERSION: "0.37"
     steps:
       - uses: actions/checkout@v4
-        with:
-          # tests/run.sh builds SonicConvert 1.10 from an older revision
-          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
@@ -44,7 +41,8 @@ jobs:
           npm install --no-save --no-package-lock playwright@1.56.1
           npx playwright install --with-deps chromium
           node SonicArranger2026/tests/ui-check.mjs SonicArranger2026/bin/sonicarranger2026.html saved.sa
-          # the WAV made in the browser is that of the native program, and SonicConvert converts the saved module
+          # the WAV made in the browser is that of the native program and that of SonicConvert
           SonicArranger2026/bin/sonicarranger2026 --wav saved.sa native.wav
           DOTNET_ROLL_FORWARD=Major dotnet "$(find SonicConvert/bin/Release -name SonicConvert.dll | head -1)" saved.sa sonicconvert.wav
           cmp saved.sa.wav native.wav
+          cmp saved.sa.wav sonicconvert.wav

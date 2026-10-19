@@ -156,7 +156,7 @@ void TestPlayer()
         inst.Arpeggios[i] = Arpeggio { Data = new uint8[14] };
     m.Instruments.Add(inst);
     m.Notes[0] = Note { Value = 37, Instrument = 1 };
-    if (Player.Create(m, 0, 8000, ChannelMode.Mono, false, true) is not Player p)
+    if (Player.Create(m, 0, 8000, ChannelMode.Mono, false, true, false) is not Player p)
     {
         Check(false, "a player for a module made in code");
         return;
@@ -174,8 +174,8 @@ void TestPlayer()
     var wav = WavFile(samples, 8000, 1);
     Check(TextOf(wav[0..4].ToArray()) == "RIFF" && wav.Length == samples.Length + 44 && wav[44] == (uint8)((samples[0] + 128) & 0xff),
           "a WAV file");
-    Check(Player.Create(m, 1, 8000, ChannelMode.Mono, false, true) is error, "there is no second song");
-    if (Player.Create(m, 0, 8000, ChannelMode.Stereo, true, true) is Player stereo)
+    Check(Player.Create(m, 1, 8000, ChannelMode.Mono, false, true, false) is error, "there is no second song");
+    if (Player.Create(m, 0, 8000, ChannelMode.Stereo, true, true, false) is Player stereo)
         Check(stereo.ReadAll(0).Length % 2 == 0, "stereo: whole samples of 2 channels");
     else
         Check(false, "a stereo player");

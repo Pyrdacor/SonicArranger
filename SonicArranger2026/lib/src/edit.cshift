@@ -1,0 +1,235 @@
+//! Changing a module: the fields of a note, the positions of the over table, new patterns, and undo.
+//!
+//! Patterns are blocks of the note table, and positions only point at them: several positions (and voices) can share a
+//! pattern, so changing a note changes it wherever its pattern is played, as in Sonic Arranger.
+
+namespace SonicArranger;
+
+using System;
+
+/// The columns of a cell in the pattern editor: the note, the two digits of the instrument (decimal) and the four hex
+/// digits of the note options (flags and arpeggio table, command, parameter high, parameter low).
+const int NoteColumn = 0;
+const int CellColumns = 7;
+
+/// The note with a new value (1 to 108; 0 for none).
+Note WithValue(Note note, int value)
+{
+    note.Value = Math.Max(0, Math.Min(108, value));
+    return note;
+}
+
+/// The note with one digit set: column 1 and 2 are the tens and ones of the instrument (0 to 9), 3 to 6 the hex digits
+/// of the note options (0 to 15). Other columns and digits leave the note as it is.
+Note WithDigit(Note note, int column, int digit)
+{
+    if (column == 1 || column == 2)
+    {
+        if (digit < 0 || digit > 9)
+            return note;
+        int tens = column == 1 ? digit : (note.Instrument / 10) % 10;
+        int ones = column == 2 ? digit : note.Instrument % 10;
+        note.Instrument = tens * 10 + ones;
+        return note;
+    }
+    if (column < 3 || column > 6 || digit < 0 || digit > 15)
+        return note;
+    // the 16 bits of the options: flags in the high byte (bits 15-8), the parameter in the low byte
+    int options = (note.Flags << 8) | note.Param;
+    int shift = (6 - column) * 4;
+    options = (options & ~(0xf << shift)) | (digit << shift);
+    note.Flags = (options >> 8) & 0xff;
+    note.Param = options & 0xff;
+    return note;
+}
+
+/// The note with one column cleared: the note column clears the note and the instrument, the instrument columns the
+/// instrument, the option columns the command and its parameter (the flags and arpeggio table stay).
+Note Cleared(Note note, int column)
+{
+    if (column == NoteColumn)
+    {
+        note.Value = 0;
+        note.Instrument = 0;
+    }
+    else if (column <= 2)
+        note.Instrument = 0;
+    else
+    {
+        note.Flags = note.Flags & 0xf0;
+        note.Param = 0;
+    }
+    return note;
+}
+
+/// The note value of a key of the computer keyboard used as a piano (as in ProTracker): the lower row
+/// Z S X D C V G B H N J M is the octave, the upper row Q 2 W 3 E R 5 T 6 Y 7 U I the one above. -1 for other keys.
+int PianoKey(int semitoneOfKey, int octave)
+{
+    if (semitoneOfKey < 0)
+        return -1;
+    int value = octave * 12 + semitoneOfKey + 1;
+    return value >= 1 && value <= 108 ? value : -1;
+}
+
+/// Sets a note of the note table (an address past its end does nothing).
+void SetNote(ref Module m, int address, Note note)
+{
+    if (address >= 0 && address < m.Notes.Count())
+        m.Notes[address] = note;
+}
+
+/// A new empty pattern of the given number of rows at the end of the note table; its address.
+int NewPattern(ref Module m, int rows)
+{
+    int address = m.Notes.Count();
+    for (var i = 0; i < rows; i += 1)
+        m.Notes.Add(new Note());
+    return address;
+}
+
+/// A copy of the pattern at an address (rows notes) at the end of the note table; its address.
+int CopyPattern(ref Module m, int from, int rows)
+{
+    int address = m.Notes.Count();
+    for (var i = 0; i < rows; i += 1)
+        m.Notes.Add(m.NoteAt(from + i));
+    return address;
+}
+
+/// Inserts a position after the given one (a copy of it: the same patterns and transposes). The start, stop and repeat
+/// positions of the songs after it move with their positions.
+void InsertPosition(ref Module m, int after)
+{
+    int at = Math.Max(0, Math.Min(after + 1, m.Positions()));
+    for (var v = 0; v < 4; v += 1)
+    {
+        var voice = m.Positions() > 0 ? m.VoiceAt(Math.Max(0, at - 1), v) : new Voice();
+        m.Voices.Insert(at * 4 + v, voice);
+    }
+    for (var i = 0; i < m.Songs.Count(); i += 1)
+    {
+        var song = m.Songs[i];
+        if (song.StartPos >= at)
+            song.StartPos += 1;
+        // inserted inside the song or right after its last position: the song gets longer
+        if (song.StopPos >= at - 1)
+            song.StopPos += 1;
+        if (song.RepeatPos >= at)
+            song.RepeatPos += 1;
+        m.Songs[i] = song;
+    }
+}
+
+/// Removes a position (not the last one there is). The start, stop and repeat positions after it move back.
+void RemovePosition(ref Module m, int position)
+{
+    if (m.Positions() <= 1 || position < 0 || position >= m.Positions())
+        return;
+    for (var v = 0; v < 4; v += 1)
+        m.Voices.RemoveAt(position * 4);
+    int last = m.Positions() - 1;
+    for (var i = 0; i < m.Songs.Count(); i += 1)
+    {
+        var song = m.Songs[i];
+        // the stop position goes back when it was after the removed one, or was it (and the song is longer than it)
+        bool stopBack = song.StopPos > position || (song.StopPos == position && song.StopPos > song.StartPos);
+        if (song.StartPos > position)
+            song.StartPos -= 1;
+        if (stopBack)
+            song.StopPos -= 1;
+        if (song.RepeatPos > position)
+            song.RepeatPos -= 1;
+        song.StartPos = Math.Min(song.StartPos, last);
+        song.StopPos = Math.Max(song.StartPos, Math.Min(song.StopPos, last));
+        song.RepeatPos = Math.Min(song.RepeatPos, last);
+        m.Songs[i] = song;
+    }
+}
+
+/// What undo restores: the parts of a module that the editor changes (copies, not shared with the module).
+struct Snapshot
+{
+    List<Note> Notes;
+    List<Voice> Voices;
+    List<SongInfo> Songs;
+    /// What was changed (for the menu, e.g. "Undo note").
+    string What;
+
+    static Snapshot Of(const ref Module m, string what)
+    {
+        return Snapshot { Notes = m.Notes.Select(n => n), Voices = m.Voices.Select(v => v), Songs = m.Songs.Select(s => s),
+                          What = what };
+    }
+
+    void Restore(ref Module m)
+    {
+        m.Notes = Notes.Select(n => n);
+        m.Voices = Voices.Select(v => v);
+        m.Songs = Songs.Select(s => s);
+    }
+}
+
+/// Undo and redo of changes. Before a change, Before(module, what) saves the state; changes of the same kind in a
+/// row (e.g. typing a number into one box) are one step.
+struct History
+{
+    List<Snapshot> Undo;
+    List<Snapshot> Redo;
+    string Last;       // the kind of the last change, to merge changes of the same kind
+
+    static History Create()
+    {
+        return History { Undo = List<Snapshot>.Create(), Redo = List<Snapshot>.Create(), Last = "" };
+    }
+
+    /// Call before changing the module. what names the change; key tells which changes are merged ("" never).
+    void Before(const ref Module m, string what, string key)
+    {
+        Redo.Clear();
+        if (key.Length > 0 && key == Last)
+            return;
+        Last = key;
+        Undo.Add(Snapshot.Of(m, what));
+        if (Undo.Count() > 200)
+            Undo.RemoveAt(0);
+    }
+
+    /// Ends merging: the next change is a step of its own.
+    void Break()
+    {
+        Last = "";
+    }
+
+    bool CanUndo()
+    {
+        return Undo.Count() > 0;
+    }
+
+    bool CanRedo()
+    {
+        return Redo.Count() > 0;
+    }
+
+    void UndoOnce(ref Module m)
+    {
+        if (Undo.Count() == 0)
+            return;
+        var s = Undo[Undo.Count() - 1];
+        Undo.RemoveAt(Undo.Count() - 1);
+        Redo.Add(Snapshot.Of(m, s.What));
+        s.Restore(ref m);
+        Last = "";
+    }
+
+    void RedoOnce(ref Module m)
+    {
+        if (Redo.Count() == 0)
+            return;
+        var s = Redo[Redo.Count() - 1];
+        Redo.RemoveAt(Redo.Count() - 1);
+        Undo.Add(Snapshot.Of(m, s.What));
+        s.Restore(ref m);
+        Last = "";
+    }
+}

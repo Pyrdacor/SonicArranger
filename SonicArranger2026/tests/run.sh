@@ -8,6 +8,7 @@
 # 2. With dotnet: builds SonicConvert of this repository and converts each packed file of the folder and its SOAR
 #    file saved by SonicArranger2026 to WAV. The two WAV files must be the same. Songs with a noise generator sound
 #    different each time in SonicConvert (it seeds it with the time): for them, only the length must be the same.
+#    The module with a note changed (by the tests) must convert as well, and give another WAV than the file.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -48,6 +49,7 @@ export DOTNET_ROLL_FORWARD=Major
 
 same=0
 noise=0
+edited=0
 failed=0
 for f in "${files[@]}"; do
     name="$(basename "$f")"
@@ -62,6 +64,15 @@ for f in "${files[@]}"; do
         failed=$((failed + 1))
         continue
     fi
+    if ! dotnet "$convert" "$work/soar/$name.edited" "$work/e.wav" > /dev/null; then
+        echo "FAILED: SonicConvert cannot convert the edited module of $name"
+        failed=$((failed + 1))
+    elif cmp -s "$work/a.wav" "$work/e.wav"; then
+        echo "FAILED: the edited module of $name sounds the same as the file"
+        failed=$((failed + 1))
+    else
+        edited=$((edited + 1))
+    fi
     if cmp -s "$work/a.wav" "$work/b.wav"; then
         same=$((same + 1))
         continue
@@ -74,5 +85,5 @@ for f in "${files[@]}"; do
     echo "FAILED: the WAV of the SOAR file of $name is not that of the file"
     failed=$((failed + 1))
 done
-echo "SonicConvert: $same the same WAV, $noise with noise the same length, $failed failed"
+echo "SonicConvert: $same the same WAV, $noise with noise the same length, $edited edited ones converted and changed, $failed failed"
 [ $failed -eq 0 ]

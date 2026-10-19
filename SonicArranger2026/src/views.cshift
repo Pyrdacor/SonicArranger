@@ -1,0 +1,174 @@
+// The panels of the tracker above the pattern view: the song header, the over table, the instruments, the values of
+// the song and of the position, and the status line.
+
+using System;
+using System.Image;
+using System.Ui;
+using SonicArranger;
+
+// the names of the number boxes: while one has the focus, the keys belong to it and not to the pattern
+const ReadOnlySlice<string> EditorBoxes = ["speed", "rows", "start", "stop", "repeat", "hz", "step",
+                                           "address0", "address1", "address2", "address3",
+                                           "sound0", "sound1", "sound2", "sound3", "notet0", "notet1", "notet2", "notet3"];
+
+bool EditorFocused(Ui ui)
+{
+    foreach (var name in EditorBoxes)
+    {
+        if (ui.HasFocus(name))
+            return true;
+    }
+    return false;
+}
+
+// the song, its timing and where it is in the over table
+void SongHeader(Ui ui, ref App app)
+{
+    var m = app.Song;
+    using (ui.Row())
+    {
+        ui.Label((app.Path.Length > 0 ? Path.GetFileName(app.Path).ToString() : "New module") + (app.Modified ? " *" : ""));
+        ui.Note(m.Packed ? "packed" : "module " + m.Version);
+        if (m.Songs.Count() > 1)
+        {
+            var names = List<string>.Create();
+            for (var i = 0; i < m.Songs.Count(); i += 1)
+                names.Add($"Song {i + 1}");
+            using (ui.Column(110))
+            {
+                if (ui.ComboBox("song", ref app.SongIndex, names))
+                    app.Position = Math.Max(0, Math.Min(m.Songs[app.SongIndex].StartPos, m.Positions() - 1));
+            }
+        }
+        var song = m.Songs[app.SongIndex];
+        ui.Note($"{song.Bpm()} BPM");
+        if (m.Owner.Length > 0)
+            ui.Tooltip("Owner: " + m.Owner.Replace("\n", " "));
+    }
+}
+
+// the over table: one line per position, the pattern address and transposes of the 4 voices
+void Positions(Ui ui, ref App app)
+{
+    var m = app.Song;
+    var song = m.Songs[app.SongIndex];
+    using (ui.Scroll("positions", 170))
+    {
+        for (var p = 0; p < m.Positions(); p += 1)
+        {
+            var sb = StringBuilder.Create();
+            sb.Append(Dec(p, 3));
+            sb.Append(p == song.StartPos ? ">" : (p == song.StopPos ? "<" : " "));
+            for (var v = 0; v < 4; v += 1)
+            {
+                var voice = m.VoiceAt(p, v);
+                sb.Append($"  {Dec(voice.NoteAddress, 4)} {Signed(voice.SoundTranspose).PadLeft(3)} {Signed(voice.NoteTranspose).PadLeft(3)}");
+            }
+            using (ui.Id(p))
+            {
+                if (ui.ListItem(sb.ToString(), p == app.Position))
+                    app.Position = p;
+            }
+        }
+    }
+}
+
+// the instruments: number, name and kind; the selected one is the one new notes get
+void Instruments(Ui ui, ref App app)
+{
+    var m = app.Song;
+    using (ui.Scroll("instruments", 170))
+    {
+        for (var i = 0; i < m.Instruments.Count(); i += 1)
+        {
+            var inst = m.Instruments[i];
+            string kind = inst.IsSynth() ? $"wave {inst.SampleWaveNo}" : $"sample {inst.SampleWaveNo}";
+            using (ui.Id(i))
+            {
+                if (ui.ListItem($"{Dec(i + 1, 2)}  {TextOf(inst.Name).PadRight(24)} {kind}", i == app.Instrument))
+                    app.Instrument = i;
+                ui.Tooltip($"Volume {inst.Volume}, {EffectName(inst.Effect)}");
+            }
+        }
+    }
+}
+
+// a number box with a label (none when it is ""); a change is saved for undo first (changes of one box in a row are
+// one step)
+void NumberBox(Ui ui, ref App app, string label, string name, ref int value, int min, int max)
+{
+    if (label.Length > 0)
+        ui.Note(label);
+    int edited = value;
+    using (ui.Column(58))
+    {
+        if (ui.IntBox(name, ref edited, min, max) && edited != value)
+        {
+            app.History.Before(app.Song, name, name);
+            value = edited;
+            app.Modified = true;
+        }
+    }
+}
+
+// the values of the song
+void SongEditor(Ui ui, ref App app)
+{
+    var song = app.Song.Songs[app.SongIndex];
+    int last = Math.Max(0, app.Song.Positions() - 1);
+    using (ui.Row())
+    {
+        NumberBox(ui, ref app, "Speed", "speed", ref song.Speed, 1, 16);
+        NumberBox(ui, ref app, "Rows", "rows", ref song.PatternLength, 1, 128);
+        NumberBox(ui, ref app, "Start", "start", ref song.StartPos, 0, last);
+        NumberBox(ui, ref app, "Stop", "stop", ref song.StopPos, 0, last);
+        NumberBox(ui, ref app, "Repeat", "repeat", ref song.RepeatPos, 0, last);
+        NumberBox(ui, ref app, "Hz", "hz", ref song.TicksPerSecond, 1, 200);
+    }
+    app.Song.Songs[app.SongIndex] = song;
+}
+
+// the 4 voices of the position: the pattern (its address in the note table) and the transposes
+void PositionEditor(Ui ui, ref App app)
+{
+    var m = app.Song;
+    if (app.Position >= m.Positions())
+        return;
+    using (ui.Row())
+    {
+        ui.Label($"Position {Dec(app.Position, 3)}");
+        for (var v = 0; v < 4; v += 1)
+        {
+            var voice = m.VoiceAt(app.Position, v);
+            NumberBox(ui, ref app, $"V{v + 1}", $"address{v}", ref voice.NoteAddress, 0, Math.Max(0, m.Notes.Count() - 1));
+            ui.Tooltip("The pattern: the address of its first note in the note table");
+            NumberBox(ui, ref app, "", $"sound{v}", ref voice.SoundTranspose, -128, 127);
+            ui.Tooltip("Sound transpose: added to the instruments");
+            NumberBox(ui, ref app, "", $"notet{v}", ref voice.NoteTranspose, -128, 127);
+            ui.Tooltip("Note transpose: added to the notes");
+            app.Song.Voices[app.Position * 4 + v] = voice;
+        }
+    }
+}
+
+// the edit mode, the octave, the step and what the last action did
+void StatusLine(Ui ui, ref App app)
+{
+    using (ui.Row())
+    {
+        if (app.EditMode)
+            ui.Label("EDIT");
+        else
+            ui.Note("Space: edit");
+        ui.Note($"Octave {app.Octave} (F1-F8)");
+        ui.Note("Step");
+        using (ui.Column(64))
+        {
+            ui.IntBox("step", ref app.Step, 0, 16);
+        }
+        int inst = app.Song.Instruments.Count() > 0 ? app.Instrument + 1 : 0;
+        ui.Note($"Instrument {Dec(inst, 2)}");
+        if (app.Message.Length > 0)
+            ui.Note(app.Message);
+    }
+}

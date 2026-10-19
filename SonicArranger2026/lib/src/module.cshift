@@ -195,7 +195,7 @@ struct Module
         return Notes[address];
     }
 
-    /// A new, empty module: one song of one position with an empty pattern of 64 rows.
+    /// A new, empty module: one song of one position, each voice with an empty pattern of its own (64 rows).
     static Module Create()
     {
         var module = Module { Version = "V1.0", Owner = "", Songs = List<SongInfo>.Create(), Voices = List<Voice>.Create(),
@@ -205,8 +205,8 @@ struct Module
                               EditData = new uint8[0] };
         module.Songs.Add(SongInfo { Speed = 6, PatternLength = 64, StartPos = 0, StopPos = 0, RepeatPos = 0, TicksPerSecond = 50 });
         for (var v = 0; v < 4; v += 1)
-            module.Voices.Add(Voice { NoteAddress = 0 });
-        for (var i = 0; i < 64; i += 1)
+            module.Voices.Add(Voice { NoteAddress = v * 64 });
+        for (var i = 0; i < 4 * 64; i += 1)
             module.Notes.Add(new());
         return module;
     }

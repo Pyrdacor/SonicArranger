@@ -1,0 +1,225 @@
+// The keyboard of the tracker: moving the cursor, the octave, undo, and in edit mode entering notes (the keyboard as a
+// piano, as in ProTracker), instruments and note options (hex digits).
+
+using System;
+using System.Ui;
+using SonicArranger;
+
+// the semitone of a piano key above the octave of the lower row, -1 for other keys: the lower row Z S X D C V G B H N
+// J M (and the comma for the next C), the upper row Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P an octave higher. The letters
+// are those of a US keyboard (on a German one Y and Z are swapped).
+int Semitone(Key key)
+{
+    switch (key)
+    {
+    case Key.Z: return 0;
+    case Key.S: return 1;
+    case Key.X: return 2;
+    case Key.D: return 3;
+    case Key.C: return 4;
+    case Key.V: return 5;
+    case Key.G: return 6;
+    case Key.B: return 7;
+    case Key.H: return 8;
+    case Key.N: return 9;
+    case Key.J: return 10;
+    case Key.M: return 11;
+    case Key.Comma: return 12;
+    case Key.Q: return 12;
+    case Key.D2: return 13;
+    case Key.W: return 14;
+    case Key.D3: return 15;
+    case Key.E: return 16;
+    case Key.R: return 17;
+    case Key.D5: return 18;
+    case Key.T: return 19;
+    case Key.D6: return 20;
+    case Key.Y: return 21;
+    case Key.D7: return 22;
+    case Key.U: return 23;
+    case Key.I: return 24;
+    case Key.D9: return 25;
+    case Key.O: return 26;
+    case Key.D0: return 27;
+    case Key.P: return 28;
+    default: return -1;
+    }
+}
+
+// the value of a hex digit key (0-9, A-F), -1 for other keys
+int HexDigit(Key key)
+{
+    switch (key)
+    {
+    case Key.D0: return 0;
+    case Key.D1: return 1;
+    case Key.D2: return 2;
+    case Key.D3: return 3;
+    case Key.D4: return 4;
+    case Key.D5: return 5;
+    case Key.D6: return 6;
+    case Key.D7: return 7;
+    case Key.D8: return 8;
+    case Key.D9: return 9;
+    case Key.NumPad0: return 0;
+    case Key.NumPad1: return 1;
+    case Key.NumPad2: return 2;
+    case Key.NumPad3: return 3;
+    case Key.NumPad4: return 4;
+    case Key.NumPad5: return 5;
+    case Key.NumPad6: return 6;
+    case Key.NumPad7: return 7;
+    case Key.NumPad8: return 8;
+    case Key.NumPad9: return 9;
+    case Key.A: return 10;
+    case Key.B: return 11;
+    case Key.C: return 12;
+    case Key.D: return 13;
+    case Key.E: return 14;
+    case Key.F: return 15;
+    default: return -1;
+    }
+}
+
+// the address of the note under the cursor
+int CursorAddress(const ref App app)
+{
+    return app.Song.VoiceAt(app.Position, app.Voice).NoteAddress + app.Row;
+}
+
+// changes the note under the cursor (saved for undo first) and moves the cursor down by the step
+void ChangeNote(ref App app, Note note, string what)
+{
+    int address = CursorAddress(app);
+    if (address < 0 || address >= app.Song.Notes.Count())
+    {
+        app.Message = "The pattern ends here: the note table has no more notes";
+        return;
+    }
+    app.History.Before(app.Song, what, "");
+    SetNote(ref app.Song, address, note);
+    app.Modified = true;
+    int rows = Math.Max(1, app.Song.Songs[app.SongIndex].PatternLength);
+    app.Row = Math.Min(rows - 1, app.Row + app.Step);
+}
+
+void InsertPositionHere(ref App app)
+{
+    app.History.Before(app.Song, "Insert position", "");
+    InsertPosition(ref app.Song, app.Position);
+    app.Position += 1;
+    app.Modified = true;
+}
+
+void RemovePositionHere(ref App app)
+{
+    if (app.Song.Positions() <= 1)
+        return;
+    app.History.Before(app.Song, "Remove position", "");
+    RemovePosition(ref app.Song, app.Position);
+    app.Modified = true;
+    KeepInRange(ref app);
+}
+
+// the voice under the cursor gets a pattern of its own at the end of the note table: empty, or a copy of its pattern
+void NewPatternHere(ref App app, bool copy)
+{
+    int rows = Math.Max(1, app.Song.Songs[app.SongIndex].PatternLength);
+    app.History.Before(app.Song, copy ? "Copy pattern" : "New pattern", "");
+    var voice = app.Song.VoiceAt(app.Position, app.Voice);
+    voice.NoteAddress = copy ? CopyPattern(ref app.Song, voice.NoteAddress, rows) : NewPattern(ref app.Song, rows);
+    app.Song.Voices[app.Position * 4 + app.Voice] = voice;
+    app.Modified = true;
+}
+
+void TrackerKeys(Ui ui, ref App app)
+{
+    var input = ui.Input();
+    int rows = Math.Max(1, app.Song.Songs[app.SongIndex].PatternLength);
+    var none = KeyModifiers.None;
+
+    if (input.Pressed(Key.Z, KeyModifiers.Ctrl))
+        Undo(ref app);
+    if (input.Pressed(Key.Y, KeyModifiers.Ctrl) || input.Pressed(Key.Z, KeyModifiers.Ctrl | KeyModifiers.Shift))
+        Redo(ref app);
+    if (input.Pressed(Key.I, KeyModifiers.Ctrl))
+        InsertPositionHere(ref app);
+    if (input.Pressed(Key.Delete, KeyModifiers.Ctrl))
+        RemovePositionHere(ref app);
+    if (input.Pressed(Key.N, KeyModifiers.Ctrl))
+        NewPatternHere(ref app, false);
+    if (input.Pressed(Key.D, KeyModifiers.Ctrl))
+        NewPatternHere(ref app, true);
+
+    if (input.Pressed(Key.Up, none))
+        app.Row = (app.Row + rows - 1) % rows;
+    if (input.Pressed(Key.Down, none))
+        app.Row = (app.Row + 1) % rows;
+    if (input.Pressed(Key.Left, none))
+    {
+        app.Column -= 1;
+        if (app.Column < 0)
+        {
+            app.Column = CellColumns - 1;
+            app.Voice = (app.Voice + 3) % 4;
+        }
+    }
+    if (input.Pressed(Key.Right, none))
+    {
+        app.Column += 1;
+        if (app.Column >= CellColumns)
+        {
+            app.Column = 0;
+            app.Voice = (app.Voice + 1) % 4;
+        }
+    }
+    if (input.Pressed(Key.Home, none))
+        app.Row = 0;
+    if (input.Pressed(Key.End, none))
+        app.Row = rows - 1;
+    if (input.Pressed(Key.PageUp, none))
+        app.Position = Math.Max(0, app.Position - 1);
+    if (input.Pressed(Key.PageDown, none))
+        app.Position = Math.Min(app.Song.Positions() - 1, app.Position + 1);
+    Key[] octaves = [Key.F1, Key.F2, Key.F3, Key.F4, Key.F5, Key.F6, Key.F7, Key.F8];
+    for (var i = 0; i < octaves.Length; i += 1)
+    {
+        if (input.Pressed(octaves[i], none))
+            app.Octave = i;
+    }
+    if (input.Pressed(Key.Space, none))
+        app.EditMode = !app.EditMode;
+    if (!app.EditMode || app.Position >= app.Song.Positions())
+        return;
+
+    // edit mode: the keys of this frame in their order
+    for (var k = 0; k < input.Keys.Count(); k += 1)
+    {
+        if (input.ModifiersAt(k) != none)
+            continue;
+        var key = input.Keys[k];
+        var note = app.Song.NoteAt(CursorAddress(app));
+        if (key == Key.Delete || key == Key.Backspace)
+        {
+            ChangeNote(ref app, Cleared(note, app.Column), "Clear");
+            continue;
+        }
+        if (app.Column == NoteColumn)
+        {
+            int value = PianoKey(Semitone(key), app.Octave);
+            if (value > 0)
+            {
+                note.Value = value;
+                if (app.Song.Instruments.Count() > 0)
+                    note.Instrument = app.Instrument + 1;
+                ChangeNote(ref app, note, "Note");
+            }
+        }
+        else
+        {
+            int digit = HexDigit(key);
+            if (digit >= 0 && (app.Column >= 3 || digit <= 9))
+                ChangeNote(ref app, WithDigit(note, app.Column, digit), "Digit");
+        }
+    }
+}

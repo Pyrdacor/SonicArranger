@@ -37,7 +37,10 @@ void SongHeader(Ui ui, ref App app)
             using (ui.Column(110))
             {
                 if (ui.ComboBox("song", ref app.SongIndex, names))
+                {
+                    StopPlaying(ref app);
                     app.Position = Math.Max(0, Math.Min(m.Songs[app.SongIndex].StartPos, m.Positions() - 1));
+                }
             }
         }
         var song = m.Songs[app.SongIndex];
@@ -160,6 +163,10 @@ void StatusLine(Ui ui, ref App app)
             ui.Label("EDIT");
         else
             ui.Note("Space: edit");
+        if (app.Play.Playing)
+            ui.Label($"PLAY {Dec(app.Play.Position, 3)}:{Dec(app.Play.Row, 2)}");
+        else
+            ui.Note("F9: play");
         ui.Note($"Octave {app.Octave} (F1-F8)");
         ui.Note("Step");
         using (ui.Column(64))

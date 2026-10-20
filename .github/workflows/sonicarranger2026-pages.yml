@@ -26,7 +26,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     env:
-      CSHIFT_VERSION: "0.37"
+      CSHIFT_VERSION: "0.38"
     steps:
       - uses: actions/checkout@v4
       - name: Install cshiftc

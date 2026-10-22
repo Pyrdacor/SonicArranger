@@ -1,0 +1,296 @@
+// Playing the songs: the replayer of the library (lib/src/player.cshift) makes the samples, in stereo at 44.1 kHz,
+// and System.Audio plays them. Each frame refills the buffer of the sound output and asks for the next frame in 20 ms.
+// When a song ends, the next one is fed right after it (as the mode says), so there is no gap between them: the output
+// still plays the end of the last one. The list keeps where each song starts in the frames written (a segment), and the
+// song and time being heard are those of the frame written minus what the output still has queued.
+
+using System;
+using System.Audio;
+using System.Ui;
+using SonicArranger;
+
+const int PlayRate = 44100;
+// the rate of the run that measures a song: the rows are the same at every rate, and this one is fast
+const int ScanRate = 2000;
+
+/// What comes after a song.
+const int ModeNone = 0;     // stop
+const int ModeLoopOne = 1;  // the same song again
+const int ModeLoopAll = 2;  // the next song of the list, after the last the first
+const int ModeShuffle = 3;  // any other song of the list
+
+/// A song of the list, once it was loaded: the module, its length and where its positions start (for seeking).
+struct SongTrack
+{
+    bool Loaded;
+    bool Failed;          // the file is missing or cannot be played
+    Module M;
+    double Length;        // seconds, played once
+    List<double> StartTimes;
+    List<int> StartPositions;
+}
+
+/// A song in the output: it starts at the frame Start of what was written, at Offset seconds into the song.
+struct Segment
+{
+    int Song;
+    int64 Start;
+    double Offset;
+}
+
+struct Playback
+{
+    bool Active;          // a song is playing or paused
+    bool Paused;
+    bool OutputOpen;
+    AudioOutput Output;
+    Player Player;        // makes the samples of the song being fed
+    bool Feeding;         // false after the last song ended (mode none): the output plays what it has
+    int FeedSong;
+    uint8[] Pending;      // samples read from the player and not written yet
+    int PendingAt;
+    int64 Written;        // frames written to the output since the start
+    List<Segment> Segments;
+    int Song;             // the song being heard
+    double Time;          // and the time in it, seconds
+    Random Rng;
+}
+
+/// Loads and measures a song of the list the first time it is needed. False if it cannot be played.
+bool PrepareSong(ref App app, int index)
+{
+    var track = app.Tracks[index];
+    if (track.Loaded)
+        return !track.Failed;
+    track.Loaded = true;
+    track.Failed = true;
+    track.StartTimes = List<double>.Create();
+    track.StartPositions = List<int>.Create();
+    var entry = app.Songs[index];
+    if (LoadModule(Path.Combine(MusicFolder, entry.File)) is Module m)
+    {
+        track.M = m;
+        if (Player.Create(m, entry.Song, ScanRate, ChannelMode.Mono, false, true, false) is Player p)
+        {
+            track.Length = (double)p.ReadAll(0).Length / ScanRate;
+            foreach (var row in p.Rows)
+            {
+                if (row.Row == 0)
+                {
+                    track.StartTimes.Add((double)row.Frame / ScanRate);
+                    track.StartPositions.Add(row.Position);
+                }
+            }
+            track.Failed = false;
+        }
+    }
+    app.Tracks[index] = track;
+    return !track.Failed;
+}
+
+/// Measures one song that was not measured yet (one per frame, so the list fills while the page is shown).
+void PrepareNext(Ui ui, ref App app)
+{
+    for (var i = 0; i < app.Tracks.Count(); i += 1)
+    {
+        if (!app.Tracks[i].Loaded)
+        {
+            PrepareSong(ref app, i);
+            ui.RequestFrame(0);
+            return;
+        }
+    }
+}
+
+/// A player for a song from the position that starts at `at` seconds or before. The time it starts at is in `start`.
+Error<Player> CreatePlayer(ref App app, int index, double at, ref double start)
+{
+    var track = app.Tracks[index];
+    var entry = app.Songs[index];
+    start = 0.0;
+    int position = track.M.Songs[entry.Song].StartPos;
+    for (var i = 0; i < track.StartTimes.Count(); i += 1)
+    {
+        if (track.StartTimes[i] > at + 0.001)
+            break;
+        start = track.StartTimes[i];
+        position = track.StartPositions[i];
+    }
+    if (start == 0.0)
+        return try Player.Create(track.M, entry.Song, PlayRate, ChannelMode.Stereo, true, true, false);
+    return try Player.CreateAt(track.M, entry.Song, position, PlayRate, ChannelMode.Stereo, true, true, false);
+}
+
+/// Plays a song of the list from `at` seconds (the start of its position): what plays now stops.
+void PlaySong(ref App app, int index, double at)
+{
+    if (!PrepareSong(ref app, index))
+    {
+        app.Message = $"{app.Songs[index].Name} cannot be played";
+        return;
+    }
+    double start = 0.0;
+    if (CreatePlayer(ref app, index, at, ref start) is not Player player)
+    {
+        app.Message = $"{app.Songs[index].Name} cannot be played";
+        return;
+    }
+    if (!app.Play.OutputOpen)
+    {
+        switch (AudioOutput.Open(PlayRate, 2))
+        {
+        case AudioOutput output:
+            app.Play.Output = output;
+            app.Play.OutputOpen = true;
+            break;
+        case error e:
+            app.Message = "No sound: " + e.Message;
+            return;
+        }
+    }
+    else
+    {
+        app.Play.Output.Clear();
+        if (app.Play.Paused)
+            app.Play.Output.Resume();
+    }
+    app.Play.Player = player;
+    app.Play.Feeding = true;
+    app.Play.FeedSong = index;
+    app.Play.Pending = new uint8[0];
+    app.Play.PendingAt = 0;
+    app.Play.Written = 0;
+    app.Play.Segments.Clear();
+    app.Play.Segments.Add(Segment { Song = index, Start = 0, Offset = start });
+    app.Play.Song = index;
+    app.Play.Time = start;
+    app.Play.Active = true;
+    app.Play.Paused = false;
+    app.Message = "";
+}
+
+void PausePlaying(ref App app)
+{
+    if (!app.Play.Active || app.Play.Paused)
+        return;
+    app.Play.Output.Pause();
+    app.Play.Paused = true;
+}
+
+void ResumePlaying(ref App app)
+{
+    if (!app.Play.Active || !app.Play.Paused)
+        return;
+    app.Play.Output.Resume();
+    app.Play.Paused = false;
+}
+
+void StopPlaying(ref App app)
+{
+    if (!app.Play.Active)
+        return;
+    app.Play.Output.Clear();
+    if (app.Play.Paused)
+        app.Play.Output.Resume();
+    app.Play.Active = false;
+    app.Play.Paused = false;
+    app.Play.Feeding = false;
+}
+
+/// The song after `index` in the mode, -1 for none.
+int NextSong(ref App app, int index)
+{
+    int count = app.Songs.Count();
+    if (app.Mode == ModeLoopOne)
+        return index;
+    if (app.Mode == ModeLoopAll)
+        return (index + 1) % count;
+    if (app.Mode == ModeShuffle)
+    {
+        if (count < 2)
+            return index;
+        int next = app.Play.Rng.Next(count - 1);
+        return next >= index ? next + 1 : next;
+    }
+    return -1;
+}
+
+/// The song being fed ended: the next one follows it in the output, or the feeding ends.
+void FeedNext(ref App app)
+{
+    int index = app.Play.FeedSong;
+    // songs that cannot be played are skipped (at most once around the list)
+    for (var tries = 0; tries < app.Songs.Count(); tries += 1)
+    {
+        index = NextSong(ref app, index);
+        if (index < 0)
+            break;
+        double start = 0.0;
+        if (PrepareSong(ref app, index) && CreatePlayer(ref app, index, 0.0, ref start) is Player player)
+        {
+            app.Play.Player = player;
+            app.Play.FeedSong = index;
+            app.Play.Segments.Add(Segment { Song = index, Start = app.Play.Written, Offset = 0.0 });
+            return;
+        }
+        if (app.Mode == ModeLoopOne)
+            break;
+    }
+    app.Play.Feeding = false;
+}
+
+/// Once a frame: refills the sound output and follows the song and time being heard.
+void UpdatePlayback(Ui ui, ref App app)
+{
+    if (!app.Play.Active || app.Play.Paused)
+        return;
+    while (app.Play.Feeding)
+    {
+        int writable = app.Play.Output.Writable();
+        if (writable <= 0)
+            break;
+        if (app.Play.PendingAt >= app.Play.Pending.Length)
+        {
+            // the player is copied out and back: its state changes while it reads
+            var player = app.Play.Player;
+            app.Play.Pending = player.Read(false);
+            app.Play.Player = player;
+            app.Play.PendingAt = 0;
+            if (app.Play.Pending.Length == 0)
+            {
+                if (player.EndOfStream())
+                    FeedNext(ref app);
+                continue;
+            }
+        }
+        int frames = Math.Min(writable, (app.Play.Pending.Length - app.Play.PendingAt) / 2);
+        int got = app.Play.Output.WriteSigned8(app.Play.Pending[app.Play.PendingAt..app.Play.PendingAt + frames * 2]);
+        app.Play.PendingAt += got * 2;
+        app.Play.Written += got;
+        if (got == 0)
+            break;
+    }
+    int queued = app.Play.Output.Queued();
+    int64 heard = app.Play.Written - queued;
+    while (app.Play.Segments.Count() > 1 && app.Play.Segments[1].Start <= heard)
+        app.Play.Segments.RemoveAt(0);
+    var segment = app.Play.Segments[0];
+    app.Play.Song = segment.Song;
+    app.Play.Time = segment.Offset + (double)Math.Max(0, heard - segment.Start) / PlayRate;
+    if (!app.Play.Feeding && queued == 0)
+    {
+        // the last song was heard to its end
+        app.Play.Active = false;
+        app.Play.Time = 0.0;
+        return;
+    }
+    ui.RequestFrame(20);
+}
+
+void ClosePlayback(ref App app)
+{
+    if (app.Play.OutputOpen)
+        app.Play.Output.Close();
+    app.Play.OutputOpen = false;
+    app.Play.Active = false;
+}

@@ -1,0 +1,10 @@
+{
+	"name": "ambermoon-player",
+	"version": "0.1.0",
+	"type": "executable",
+	"sources": ["src"],
+	"dependencies": ["../lib"],
+	"assets": ["music"],
+	"output": "bin/ambermoon-player",
+	"optimize": 2
+}

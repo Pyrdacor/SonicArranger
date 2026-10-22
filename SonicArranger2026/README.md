@@ -15,6 +15,9 @@ This is the start; it grows step by step.
 | Play | in the tracker (F9 the song, F10 from the position shown; the pattern view follows the row being heard), on Windows, Linux and in the browser; and into WAV files (File > Export WAV, Ctrl+E; `--wav`). The same samples as SonicConvert 1.11, which follows the Amiga replay routine |
 | Next | the instrument editor, waves and samples, saving in the packed format |
 
+The [Ambermoon player](player) plays all songs of Ambermoon with the same replayer, also in the browser:
+<https://pyrdacor.github.io/SonicArranger/player/>.
+
 ## Build and run
 
 With [cshiftc](https://github.com/Robert-Schneckenhaus/CShift/releases) (0.38 or newer):
@@ -90,6 +93,7 @@ heard after about two seconds, as far as the replayer has made the samples ahead
 | `lib/src/player.cshift` | the replayer and WAV files |
 | `src` | the tracker: the window (`main`), the panels (`views`), the pattern view (`pattern`), the keys (`keys`) |
 | `tests` | the tests of the library and `run.sh` |
+| `player` | the Ambermoon player: plays the songs of Ambermoon (list, timeline, loop and shuffle) |
 
 Every value of a module is kept as it is in the file, also the bytes whose meaning is unknown, so a module file that
 is opened and saved stays the same, byte for byte.

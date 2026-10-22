@@ -15,6 +15,9 @@ All the docs can be found [here](Docs).
 
 A tracker for Sonic Arranger modules for Windows, Linux and the browser, written in CShift: see [SonicArranger2026](SonicArranger2026).
 
+The [Ambermoon player](SonicArranger2026/player) plays all Sonic Arranger songs of Ambermoon in the browser:
+<https://pyrdacor.github.io/SonicArranger/player/>.
+
 ### SonicConvert
 
 Converts SA files to WAV files or to module files which can be loaded and edited in SonicArranger.

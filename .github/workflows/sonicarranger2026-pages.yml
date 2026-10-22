@@ -1,5 +1,5 @@
 # SonicArranger2026 in the browser: the page of "cshiftc publish" (one HTML file with everything) on GitHub Pages,
-# for every push to main that changes the tracker.
+# for every push to main that changes the tracker; the Ambermoon player (with the songs of Ambermoon) under /player/.
 name: SonicArranger2026 on GitHub Pages
 
 on:
@@ -40,6 +40,12 @@ jobs:
           "$CSHIFTC" publish SonicArranger2026
           mkdir -p _site
           cp SonicArranger2026/bin/sonicarranger2026.html _site/index.html
+      - name: Build the player
+        run: |
+          SonicArranger2026/player/fetch-music.sh
+          "$CSHIFTC" publish SonicArranger2026/player
+          mkdir -p _site/player
+          cp SonicArranger2026/player/bin/ambermoon-player.html _site/player/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

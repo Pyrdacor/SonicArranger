@@ -1,0 +1,206 @@
+// The Ambermoon player: plays the Sonic Arranger songs of Ambermoon (src/songs.cshift) with the replayer of
+// SonicArranger2026, on Windows, Linux and in the browser (GitHub Pages). A list of the songs, each with its number,
+// name, a timeline with the position being heard (a click there jumps to that position), Play (Pause while it plays)
+// and Stop. Playing another song stops the one playing. After a song: stop, the same song again, the next song or a
+// random one.
+//
+//   ambermoon-player                  the songs in the folder "music" (the packed files of the Ambermoon repository)
+//   ambermoon-player --frames N       draws N frames and closes (for screenshots and tests)
+
+using System;
+using System.Ui;
+using SonicArranger;
+
+struct App
+{
+    List<SongEntry> Songs;
+    List<SongTrack> Tracks;   // the same index as Songs
+    int Mode;                 // what comes after a song: ModeNone, ModeLoopOne, ModeLoopAll, ModeShuffle
+    string Message;
+    Playback Play;            // src/play.cshift
+}
+
+/// A time in seconds as "m:ss".
+string TimeText(double seconds)
+{
+    int s = Math.Max(0, (int)seconds);
+    int rest = s % 60;
+    return $"{s / 60}:" + (rest < 10 ? "0" : "") + rest.ToString();
+}
+
+// the timeline of a song: a bar, the part played filled, the marker at the time being heard; a click plays the song
+// from the position at that time
+void Timeline(Ui ui, ref App app, int index)
+{
+    var theme = ui.GetTheme();
+    var r = ui.Area("timeline", 0, 26);
+    var track = app.Tracks[index];
+    bool current = app.Play.Active && app.Play.Song == index;
+    int scale = Math.Max(1, (int)(ui.Scale() + 0.5));
+    int barHeight = 6 * scale;
+    int knob = 7 * scale;
+    var bar = Rect.Create(r.X + knob, r.Y + (r.Height - barHeight) / 2, Math.Max(1, r.Width - 2 * knob), barHeight);
+    var canvas = ui.Canvas();
+    canvas.FillRoundRect(bar, barHeight / 2, ui.Hovered() ? theme.ControlHover : theme.Border);
+    if (!track.Loaded || track.Failed || track.Length <= 0.0)
+        return;
+    if (ui.Hovered())
+        ui.SetCursor(Cursor.Hand);
+    if (current)
+    {
+        double fraction = Math.Max(0.0, Math.Min(1.0, app.Play.Time / track.Length));
+        int x = bar.X + (int)(fraction * (double)bar.Width);
+        canvas.FillRoundRect(Rect.Create(bar.X, bar.Y, Math.Max(barHeight, x - bar.X), barHeight), barHeight / 2,
+                             theme.Accent);
+        canvas.FillCircle((double)x, (double)(bar.Y + barHeight / 2), (double)knob, theme.Accent);
+        canvas.FillCircle((double)x, (double)(bar.Y + barHeight / 2), (double)(knob / 2), theme.AccentText);
+    }
+    if (ui.Clicked())
+    {
+        double fraction = (double)(ui.Input().MouseX - bar.X) / (double)bar.Width;
+        PlaySong(ref app, index, Math.Max(0.0, Math.Min(1.0, fraction)) * track.Length);
+    }
+}
+
+void SongLine(Ui ui, ref App app, int index)
+{
+    var entry = app.Songs[index];
+    bool current = app.Play.Active && app.Play.Song == index;
+    bool playing = current && !app.Play.Paused;
+    using (ui.Id(index))
+    {
+        using (ui.Row())
+        {
+            using (ui.Column(72))
+            {
+                if (ui.Button(playing ? "Pause" : "Play"))
+                {
+                    if (playing)
+                        PausePlaying(ref app);
+                    else if (current)
+                        ResumePlaying(ref app);
+                    else
+                    {
+                        StopPlaying(ref app);
+                        PlaySong(ref app, index, 0.0);
+                    }
+                }
+            }
+            using (ui.Column(64))
+            {
+                if (ui.Button("Stop") && current)
+                    StopPlaying(ref app);
+            }
+            using (ui.Column(300))
+            {
+                string number = (entry.Number < 10 ? " " : "") + entry.Number.ToString();
+                if (current)
+                    ui.Label($"{number}  {entry.Name}");
+                else
+                    ui.Note($"{number}  {entry.Name}");
+            }
+            using (ui.Column(0))
+                Timeline(ui, ref app, index);
+            using (ui.Column(110))
+            {
+                var track = app.Tracks[index];
+                if (!track.Loaded)
+                    ui.Note("...");
+                else if (track.Failed)
+                    ui.Note("missing");
+                else if (current)
+                    ui.Label($"{TimeText(app.Play.Time)} / {TimeText(track.Length)}");
+                else
+                    ui.Note(TimeText(track.Length));
+            }
+        }
+    }
+}
+
+void Draw(Ui ui, ref App app)
+{
+    var input = ui.Input();
+    UpdatePlayback(ui, ref app);
+    PrepareNext(ui, ref app);
+
+    using (ui.Row())
+    {
+        ui.Label("Ambermoon - the music");
+        ui.Note("Sonic Arranger songs by Matthias Steinwachs");
+    }
+    using (ui.Row())
+    {
+        ui.Note("After a song:");
+        ui.Radio("Stop", ref app.Mode, ModeNone);
+        ui.Radio("Loop the song", ref app.Mode, ModeLoopOne);
+        ui.Radio("Loop all songs", ref app.Mode, ModeLoopAll);
+        ui.Radio("Shuffle", ref app.Mode, ModeShuffle);
+    }
+    using (ui.Row())
+    {
+        if (app.Message.Length > 0)
+            ui.Label(app.Message);
+        else if (app.Play.Active)
+        {
+            var entry = app.Songs[app.Play.Song];
+            ui.Note(app.Play.Paused ? "Paused:" : "Playing:");
+            ui.Label($"{entry.Number}  {entry.Name}");
+            ui.Note($"{TimeText(app.Play.Time)} / {TimeText(app.Tracks[app.Play.Song].Length)}");
+        }
+        else
+            ui.Note("Play a song (Space pauses and resumes). A click on a timeline plays from there.");
+    }
+    ui.Separator();
+    using (ui.Scroll("songs", 0))
+    {
+        for (var i = 0; i < app.Songs.Count(); i += 1)
+            SongLine(ui, ref app, i);
+    }
+
+    if (input.Pressed(Key.Space) && app.Play.Active)
+    {
+        if (app.Play.Paused)
+            ResumePlaying(ref app);
+        else
+            PausePlaying(ref app);
+    }
+}
+
+int Main(string[] args)
+{
+    int frames = 0;
+    for (var i = 0; i < args.Length; i += 1)
+    {
+        if (args[i] == "--frames" && i + 1 < args.Length && args[i + 1].ParseInt() is int n)
+        {
+            frames = n;
+            i += 1;
+        }
+    }
+
+    var window = try Window.Open("Ambermoon - the music", 1000, 760);
+    var ui = Ui.Create();
+    ui.SetTheme(Theme.Dark());
+    var app = App { Songs = AmbermoonSongs(), Tracks = List<SongTrack>.Create(), Mode = ModeNone, Message = "" };
+    for (var i = 0; i < app.Songs.Count(); i += 1)
+        app.Tracks.Add(SongTrack { });
+    app.Play.Segments = List<Segment>.Create();
+    app.Play.Pending = new uint8[0];
+    app.Play.Rng = Random.Create();
+    int count = 0;
+    while (window.Update())
+    {
+        ui.Begin(window);
+        Draw(ui, ref app);
+        if (frames > 0)
+            window.Show(ui.End());
+        else
+            window.Show(ui);
+        count += 1;
+        if (frames > 0 && count >= frames)
+            break;
+    }
+    ClosePlayback(ref app);
+    window.Dispose();
+    return 0;
+}

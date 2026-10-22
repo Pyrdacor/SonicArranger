@@ -34,6 +34,9 @@ jobs:
         run: |
           "$CSHIFTC" build SonicArranger2026
           "$CSHIFTC" publish SonicArranger2026
+          SonicArranger2026/player/fetch-music.sh "$RUNNER_TEMP/ambermoon/Music"
+          "$CSHIFTC" build SonicArranger2026/player
+          "$CSHIFTC" publish SonicArranger2026/player
       - name: Tests
         run: SonicArranger2026/tests/run.sh "$RUNNER_TEMP/ambermoon/Music"
       - name: The tracker in a browser

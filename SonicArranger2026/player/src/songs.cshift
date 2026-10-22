@@ -1,0 +1,63 @@
+// The songs of Ambermoon (https://github.com/Pyrdacor/Ambermoon, the folder Music): the numbers and names of its
+// README. The 32 songs of the game (Music.amb), then the intro, whose file holds a second song for the main menu, and
+// the extro. The player reads the packed files (the export format, as in the game) from the folder "music".
+
+using System;
+using SonicArranger;
+
+const string MusicFolder = "music";
+
+/// A song of the list: the file in MusicFolder and the song in it (0-based).
+struct SongEntry
+{
+    int Number;
+    string Name;
+    string File;
+    int Song;
+}
+
+SongEntry Entry(int number, string name, string file, int song)
+{
+    return SongEntry { Number = number, Name = name, File = file, Song = song };
+}
+
+List<SongEntry> AmbermoonSongs()
+{
+    var s = List<SongEntry>.Create();
+    s.Add(Entry(1, "Who Said Hi Ho", "SONIC.WhoSaidHiHo", 0));
+    s.Add(Entry(2, "Mellow Camel Funk", "SONIC.MellowCamelFunk", 0));
+    s.Add(Entry(3, "Close To The Hedge", "SONIC.CloseTheHedge", 0));
+    s.Add(Entry(4, "Voice Of The Bagpipe", "SONIC.VoiceOfTheBagpipe", 0));
+    s.Add(Entry(5, "Downtown", "SONIC.Downtown", 0));
+    s.Add(Entry(6, "Ship", "SONIC.Ship", 0));
+    s.Add(Entry(7, "Whole Lotta Dove", "SONIC.WholeLottaDove", 0));
+    s.Add(Entry(8, "Horse Is No Disgrace", "SONIC.HorseIsNoDisgrace", 0));
+    s.Add(Entry(9, "Don't Look Bach", "SONIC.DontLookBach", 0));
+    s.Add(Entry(10, "Rough Waterfront Tavern", "SONIC.RoughWaterfrontTavern", 0));
+    s.Add(Entry(11, "Sapphire Fireballs Of Pure Love", "SONIC.SapphireFireballsOfPureLove", 0));
+    s.Add(Entry(12, "The Aum Remains The Same", "SONIC.TheAumRemainsTheSame", 0));
+    s.Add(Entry(13, "Capital", "SONIC.Capital", 0));
+    s.Add(Entry(14, "Plodding Along", "SONIC.PloddingAlong", 0));
+    s.Add(Entry(15, "Compact Disc", "SONIC.CompactDisc", 0));
+    s.Add(Entry(16, "Riverside Travelling Blues", "SONIC.RiversideTravellingBlues", 0));
+    s.Add(Entry(17, "Nobodys Vault But Mine", "SONIC.NobodysVaultButMine", 0));
+    s.Add(Entry(18, "La Crypta Strangiato", "SONIC.LaCryptaStrangiato", 0));
+    s.Add(Entry(19, "Misty Dungeon Hop", "SONIC.MistyDungeonHop", 0));
+    s.Add(Entry(20, "Burn Baby Burn", "SONIC.BurnBabyBurn!", 0));
+    s.Add(Entry(21, "Bar Brawlin", "SONIC.BarBrawlin", 0));
+    s.Add(Entry(22, "Psychedelic Dune Groove", "SONIC.PsychedelicDuneGroove", 0));
+    s.Add(Entry(23, "Stairway To Level 50", "SONIC.Stairway_to_level_50", 0));
+    s.Add(Entry(24, "That Hunch Is Back", "SONIC.ThatHunchIsBack", 0));
+    s.Add(Entry(25, "Chicken Soup", "SONIC.ChickenSoup", 0));
+    s.Add(Entry(26, "Dragon Chase In Creepy Dungeon", "SONIC.DragonChaseInCreepyDungeon", 0));
+    s.Add(Entry(27, "His Masters Voice", "SONIC.HisMastersVoice", 0));
+    s.Add(Entry(28, "No Name", "SONIC.NoName-Secret", 0));
+    s.Add(Entry(29, "Oh No Not Another Magical Event", "SONIC.OhNoNotAnotherMagEvent", 0));
+    s.Add(Entry(30, "The Uh Oh Song", "SONIC.TheUhOhSong", 0));
+    s.Add(Entry(31, "Owner Of A Lonely Sword", "SONIC.OwnerOfALonelySword", 0));
+    s.Add(Entry(32, "Game Over", "SONIC.GameOver", 0));
+    s.Add(Entry(33, "Intro", "SONIC.Intro", 0));
+    s.Add(Entry(34, "Main Menu", "SONIC.Intro", 1));
+    s.Add(Entry(35, "Extro", "SONIC.Extro", 0));
+    return s;
+}
